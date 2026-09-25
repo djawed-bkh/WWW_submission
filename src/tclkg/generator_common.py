@@ -16,6 +16,7 @@ TEMPORAL_GRANULARITY = "D"
 TODAY = np.datetime64("2023-12-31", TEMPORAL_GRANULARITY)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = PROJECT_ROOT / "Results"
+ITERATIVE_ROOT = PROJECT_ROOT / "Results/Iterative"
 
 
 def _resolve_data_root() -> Path:
@@ -34,6 +35,24 @@ ROOT_DATA = _resolve_data_root()
 SUPPORT_KEY = "support"
 STATUS_KEY = "status"
 RELATIONS_KEY = "relations"
+SupportCounts = tuple[int, int]
+
+
+def _support_ratio(value: object) -> float | None:
+    if not isinstance(value, (tuple, list)) or len(value) != 2:
+        return None
+    occurrences, total = value
+    if (
+        isinstance(occurrences, bool)
+        or isinstance(total, bool)
+        or not isinstance(occurrences, int)
+        or not isinstance(total, int)
+        or occurrences < 0
+        or total <= 0
+        or occurrences > total
+    ):
+        return None
+    return occurrences / total
 
 
 def _extract_relation_payloads(dom: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
@@ -51,19 +70,14 @@ def _extract_relation_payloads(dom: Mapping[str, object]) -> dict[str, Mapping[s
             raise ValueError(
                 f"Invalid scored domain format: relation '{relation}' must map to a payload."
             )
-        if SUPPORT_KEY not in payload or STATUS_KEY not in payload:
+        if SUPPORT_KEY not in payload:
             raise ValueError(
-                f"Invalid scored domain format: relation '{relation}' must contain '{SUPPORT_KEY}' and '{STATUS_KEY}'."
+                f"Invalid scored domain format: relation '{relation}' must contain '{SUPPORT_KEY}'."
             )
         support = payload.get(SUPPORT_KEY)
-        status = payload.get(STATUS_KEY)
-        if support is not None and not isinstance(support, (int, float)):
+        if not isinstance(support, (tuple, list)) or _support_ratio(support) is None and support != (0, 0) and support != [0, 0]:
             raise ValueError(
-                f"Invalid scored domain format: relation '{relation}' has a non numeric support."
-            )
-        if status is not None and not isinstance(status, str):
-            raise ValueError(
-                f"Invalid scored domain format: relation '{relation}' has a non string status."
+            f"Invalid scored domain format: relation '{relation}' must have an (occurrences, total) support pair."
             )
         payloads[relation] = payload
     return payloads
@@ -73,33 +87,21 @@ def _extract_relation_scores(dom: Mapping[str, object]) -> dict[str, float]:
     """Extract numeric Allen-relation supports from structured scored domains."""
     scores: dict[str, float] = {}
     for relation, payload in _extract_relation_payloads(dom).items():
-        support = payload.get(SUPPORT_KEY)
-        if isinstance(support, (int, float)):
-            scores[relation] = float(support)
+        ratio = _support_ratio(payload.get(SUPPORT_KEY))
+        if ratio is not None:
+            scores[relation] = ratio
     return scores
 
 
-def _extract_relation_statuses(dom: Mapping[str, object]) -> dict[str, str | None]:
-    """Extract per-relation statuses from structured scored domains."""
-    statuses: dict[str, str | None] = {}
-    for relation, payload in _extract_relation_payloads(dom).items():
-        status = payload.get(STATUS_KEY)
-        statuses[relation] = status if isinstance(status, str) else None
-    return statuses
-
-
 def _build_structured_domain(
-    relations: Mapping[str, float | None],
-    relation_statuses: Mapping[str, str | None] | None = None,
+    relations: Mapping[str, SupportCounts],
+    domain_status: str | None = None,
 ) -> dict[str, object]:
-    """Build a scored domain with support/status stored per relation."""
-    statuses = relation_statuses or {}
+    """Build a scored domain with support stored per relation, plus a domain-level status."""
     return {
+        STATUS_KEY: domain_status,
         RELATIONS_KEY: {
-            relation: {
-                SUPPORT_KEY: support,
-                STATUS_KEY: statuses.get(relation),
-            }
+            relation: {SUPPORT_KEY: support}
             for relation, support in relations.items()
         }
     }
@@ -163,13 +165,12 @@ def BasicRepairInconsistency(qcn: dict, key1: tuple[str, str], key2: tuple[str, 
     if composition is not None and composition:
 
 
-        relation_scores = {r: -1.0 for r in composition.keys()}
+        relation_scores = {r: (0, 0) for r in composition.keys()}
     else:
 
-        relation_scores = {r: -1.0 for r in ALLEN_RELATIONS}
+        relation_scores = {r: (0, 0) for r in ALLEN_RELATIONS}
 
-    relation_statuses = {relation: "Repaired" for relation in relation_scores}
-    what_to_add = _build_structured_domain(relation_scores, relation_statuses)
+    what_to_add = _build_structured_domain(relation_scores)
     converse_what_to_add = converse_domain_scores(what_to_add)
 
 
@@ -188,11 +189,12 @@ def converse_domain_set(dom: set[str]) -> set[str]:
 
 def converse_domain_scores(dom: Mapping[str, object]) -> dict[str, object]:
     """Return converse Allen relations for a structured scored domain."""
-    relations = _extract_relation_scores(dom)
-    statuses = _extract_relation_statuses(dom)
-    converse_relations = {ALLEN_CONVERSE[r]: score for r, score in relations.items()}
-    converse_statuses = {ALLEN_CONVERSE[r]: status for r, status in statuses.items()}
-    return _build_structured_domain(converse_relations, converse_statuses)
+    relations = _extract_relation_payloads(dom)
+    converse_relations = {
+        ALLEN_CONVERSE[relation]: payload[SUPPORT_KEY]
+        for relation, payload in relations.items()
+    }
+    return _build_structured_domain(converse_relations, dom.get(STATUS_KEY))
 
 
 def build_complete_network(
@@ -262,13 +264,11 @@ def build_scored_networkwithThreshold(
     for property1 in filtered_properties:
         for property2 in filtered_properties:
             if property1 != property2:
-                relation_scores: dict[str, float | None] = {
-                    relation: None for relation in default_constraints
+                relation_scores: dict[str, tuple[int, int]] = {
+                    relation: (0, 0) for relation in default_constraints
                 }
-                relation_statuses = {relation: None for relation in default_constraints}
                 network[(property1, property2)] = _build_structured_domain(
                     relation_scores,
-                    relation_statuses,
                 )
     return network
 
@@ -326,14 +326,14 @@ def path_consistency_classique(qcn: dict) -> dict | None:
         domain: Mapping[str, object],
         left_domain: Mapping[str, object],
         right_domain: Mapping[str, object],
-    ) -> dict[str, float]:
+    ) -> dict[str, SupportCounts]:
         left_relations = set(_extract_relation_scores(left_domain))
         right_relations = set(_extract_relation_scores(right_domain))
         domain_relations = set(_extract_relation_payloads(domain))
         composed_relations = compose_allen_set(left_relations, right_relations)
         return {
-            relation: 0.0
-            for relation in domain_relations
+            relation: payload[SUPPORT_KEY]
+            for relation, payload in _extract_relation_payloads(domain).items()
             if relation in composed_relations
         }
 
@@ -377,11 +377,7 @@ def path_consistency_classique(qcn: dict) -> dict | None:
                         )
                     return None
                 else:
-                    dik_statuses = {
-                        relation: _extract_relation_statuses(dik).get(relation)
-                        for relation in new_dik
-                    }
-                    qcn_copy[(i, k)] = _build_structured_domain(new_dik, dik_statuses)
+                    qcn_copy[(i, k)] = _build_structured_domain(new_dik, dik.get(STATUS_KEY))
                     qcn_copy[(k, i)] = converse_domain_scores(
                         qcn_copy[(i, k)]
                     )
@@ -396,11 +392,7 @@ def path_consistency_classique(qcn: dict) -> dict | None:
                         )
                     return None
                 else:
-                    dkj_statuses = {
-                        relation: _extract_relation_statuses(dkj).get(relation)
-                        for relation in new_dkj
-                    }
-                    qcn_copy[(k, j)] = _build_structured_domain(new_dkj, dkj_statuses)
+                    qcn_copy[(k, j)] = _build_structured_domain(new_dkj, dkj.get(STATUS_KEY))
                     qcn_copy[(j, k)] = converse_domain_scores(
                         qcn_copy[(k, j)]
                     )

@@ -9,7 +9,7 @@ _EXPORTED_MODULES = {
     "qcn_generator2",
     "random_experiments",
     "rule_discovery",
-    "run_experiments",
+    "launcher",
     "time_package",
 }
 
@@ -19,7 +19,7 @@ __all__ = [
     "qcn_generator2",
     "random_experiments",
     "rule_discovery",
-    "run_experiments",
+    "launcher",
     "time_package",
 ]
 

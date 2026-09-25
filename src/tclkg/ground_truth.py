@@ -56,11 +56,19 @@ def load_qcn_result(path: Path) -> dict[str, Any]:
 
 
 def _canonical_support(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 2
+        or isinstance(value[0], bool)
+        or isinstance(value[1], bool)
+        or not isinstance(value[0], int)
+        or not isinstance(value[1], int)
+        or value[0] < 0
+        or value[1] < 0
+        or value[0] > value[1]
+    ):
         raise ValueError(f"Invalid support value: {value!r}")
-    return round(float(value), 12)
+    return [value[0], value[1]]
 
 
 def _canonical_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
@@ -74,10 +82,9 @@ def _canonical_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             raise ValueError(f"Relation payload must be a mapping: {relation}")
         canonical_relations[relation] = {
-            "status": payload.get("status"),
             "support": _canonical_support(payload.get("support")),
         }
-    return {"relations": canonical_relations}
+    return {"status": domain.get("status"), "relations": canonical_relations}
 
 
 def canonicalize_section(section: Mapping[str, Any]) -> dict[str, Any]:
@@ -113,34 +120,41 @@ def semantic_stats(section: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(relations, Mapping):
             raise ValueError("QCN domain must contain a 'relations' mapping")
 
-        domain_has_observed = False
+        domain_is_observed = domain.get("status") == "Observed"
         domain_positive_count = 0
         for payload in relations.values():
             if not isinstance(payload, Mapping):
                 raise ValueError("Relation payload must be a mapping")
             total_relations += 1
-            status = payload.get("status")
-            status_key = "None" if status is None else str(status)
-            status_counts[status_key] = status_counts.get(status_key, 0) + 1
 
             support = payload.get("support")
-            if support is None:
-                support_counts["none"] += 1
-            elif isinstance(support, (int, float)) and not isinstance(support, bool):
-                if support == 0:
-                    support_counts["zero"] += 1
-                elif support > 0:
-                    support_counts["positive"] += 1
-                    domain_positive_count += 1
-                else:
-                    support_counts["negative"] += 1
-            else:
+            if (
+                not isinstance(support, (tuple, list))
+                or len(support) != 2
+                or not all(isinstance(value, int) and not isinstance(value, bool) for value in support)
+                or support[0] < 0
+                or support[1] < 0
+                or support[0] > support[1]
+            ):
                 raise ValueError(f"Invalid support value: {support!r}")
+            occurrences, tested_pairs = support
 
-            if status in {"Observed", "Observed and inferred"}:
-                domain_has_observed = True
+            status_key = (
+                "Observed" if domain_is_observed and occurrences > 0 else
+                "None" if domain_is_observed else
+                "Inferred"
+            )
+            status_counts[status_key] = status_counts.get(status_key, 0) + 1
 
-        if domain_has_observed:
+            if tested_pairs == 0:
+                support_counts["none"] += 1
+            elif occurrences == 0:
+                support_counts["zero"] += 1
+            else:
+                support_counts["positive"] += 1
+                domain_positive_count += 1
+
+        if domain_is_observed:
             domains_with_observed += 1
         if domain_positive_count > 0:
             domains_with_positive_support += 1
@@ -172,7 +186,6 @@ def transition_stats(
     none_after_oracle_total = 0
     none_to_inferred = 0
     observed_after_oracle_total = 0
-    observed_to_observed_and_inferred = 0
     domains_without_positive_after_oracle = 0
     domains_without_positive_to_positive = 0
     initial_relation_total = 0
@@ -187,50 +200,46 @@ def transition_stats(
         ):
             raise ValueError(f"Invalid QCN relations for pair: {pair}")
 
-        oracle_has_positive = False
-        propagation_has_positive = False
+        oracle_is_observed = oracle_domain.get("status") == "Observed"
+        propagation_is_observed = propagation_domain.get("status") == "Observed"
         initial_relation_total += len(oracle_relations)
         propagation_relation_total += len(propagation_relations)
 
         for relation, oracle_payload in oracle_relations.items():
             if not isinstance(oracle_payload, Mapping):
                 raise ValueError(f"Invalid oracle payload for {pair}/{relation}")
-            propagation_payload = propagation_relations.get(relation, {})
-            if not isinstance(propagation_payload, Mapping):
-                propagation_payload = {}
-
-            oracle_status = oracle_payload.get("status")
-            propagation_status = propagation_payload.get("status")
             oracle_support = oracle_payload.get("support")
-            if oracle_status is None:
+            oracle_relation_observed = (
+                oracle_is_observed
+                and isinstance(oracle_support, (list, tuple))
+                and len(oracle_support) == 2
+                and oracle_support[0] > 0
+            )
+
+            propagation_payload = propagation_relations.get(relation)
+            if propagation_payload is None:
+                propagation_status = None
+            elif propagation_is_observed:
+                propagation_status = "Observed"
+            else:
+                propagation_status = "Inferred"
+
+            if not oracle_relation_observed:
                 none_after_oracle_total += 1
                 if propagation_status == "Inferred":
                     none_to_inferred += 1
-            if oracle_status == "Observed":
+            else:
                 observed_after_oracle_total += 1
-                if propagation_status == "Observed and inferred":
-                    observed_to_observed_and_inferred += 1
-            if isinstance(oracle_support, (int, float)) and oracle_support > 0:
-                oracle_has_positive = True
 
-        for propagation_payload in propagation_relations.values():
-            if not isinstance(propagation_payload, Mapping):
-                raise ValueError(f"Invalid propagation payload for pair: {pair}")
-            support = propagation_payload.get("support")
-            if isinstance(support, (int, float)) and support > 0:
-                propagation_has_positive = True
-                break
-
-        if not oracle_has_positive:
+        if not oracle_is_observed:
             domains_without_positive_after_oracle += 1
-            if propagation_has_positive:
+            if propagation_is_observed:
                 domains_without_positive_to_positive += 1
 
     return {
         "none_after_oracle_total": none_after_oracle_total,
         "none_to_inferred": none_to_inferred,
         "observed_after_oracle_total": observed_after_oracle_total,
-        "observed_to_observed_and_inferred": observed_to_observed_and_inferred,
         "after_oracle_relation_total": initial_relation_total,
         "after_propagation_relation_total": propagation_relation_total,
         "domains_without_positive_after_oracle": domains_without_positive_after_oracle,

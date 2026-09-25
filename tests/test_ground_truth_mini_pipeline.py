@@ -44,15 +44,15 @@ def test_mini_end_to_end_learner_matches_snapshot(tmp_path, monkeypatch) -> None
     assert result is not None
     assert (
         ground_truth.canonical_section_hash(result["initial"])
-        == "ba32ab731c95136b3c04f2a0bf08e4278c0341a4d3976795305c55ed95d09433"
+        == "e3a59332dc5a63a5eccd89cceb2b6a7090b7d31b08b826d1cfb5f2cf00c14d12"
     )
     assert (
         ground_truth.canonical_section_hash(result["after_oracle"])
-        == "6597418d9171fec0ea27257ca94abd19ced763e109b8118ddba456c270fcfdc9"
+        == "2d27948823fa9bcfe4cb597b8c9d1936f9a49a6c04f4323b94a85f3e1cf9e7ee"
     )
     assert (
         ground_truth.canonical_section_hash(result["after_propagation"])
-        == "5c79c8f2d33a98c9d68fcf25dd848d00564b561c8c2c4610d1f81ae2b365a278"
+        == "c19052b622b035630e5ac86ac8eb44ab9ce6fbaaf3d1fff88ef6b7b95aaa53cd"
     )
 
     assert ground_truth.semantic_stats(result["after_oracle"]) == {

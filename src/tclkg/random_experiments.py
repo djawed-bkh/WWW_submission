@@ -1,11 +1,16 @@
 import argparse
 import copy
+import csv
+import re
+import statistics
 import json
+import math
 from collections.abc import Mapping
 from collections import deque
 import os
 from itertools import combinations
 import multiprocessing as mp
+import random
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +71,24 @@ def read_qcn_from_json(jsonfile: str) -> dict[tuple[str, str], dict[str, float]]
 
         if isinstance(raw_domain, list):
             domain = {relation: 0.0 for relation in raw_domain}
+        elif isinstance(raw_domain, dict) and isinstance(
+            raw_domain.get("relations"), Mapping
+        ):
+            domain = {}
+            for relation, payload in raw_domain["relations"].items():
+                if not isinstance(payload, Mapping):
+                    raise TypeError(
+                        f"Invalid relation payload for pair {pair_key}: {relation}"
+                    )
+                support = payload.get("support")
+                if (
+                    not isinstance(support, (tuple, list))
+                    or len(support) != 2
+                    or not all(isinstance(value, int) for value in support)
+                    or support[1] <= 0
+                ):
+                    continue
+                domain[relation] = support[0] / support[1]
         elif isinstance(raw_domain, dict):
             domain = {
                 relation: float(score)
@@ -493,8 +516,6 @@ def _extract_statuses_from_domain(raw_domain: Any) -> list[str]:
                     statuses.append("observed")
                 elif normalized in {"inferred", "infered"}:
                     statuses.append("inferred")
-                elif normalized in {"observed and inferred", "inferred and observed"}:
-                    statuses.append("observed_and_inferred")
                 elif normalized == "repaired":
                     statuses.append("repaired")
                 else:
@@ -522,8 +543,6 @@ def _normalize_transition_status(status: Any) -> str | None:
         return "observed"
     if normalized in {"inferred", "infered"}:
         return "inferred"
-    if normalized in {"observed and inferred", "inferred and observed"}:
-        return "observed_and_inferred"
     if normalized == "none":
         return "none"
     return None
@@ -717,7 +736,7 @@ def plot_iswc_domain_size_subplots() -> dict[str, dict[str, Any]]:
                     continue
 
                 prop_status = _normalize_transition_status(prop_payload.get("status"))
-                if prop_status in {"observed", "observed_and_inferred"}:
+                if prop_status == "observed":
                     has_observed = True
 
                 oracle_payload = oracle_relations.get(relation)
@@ -863,7 +882,7 @@ def plot_iswc_file_domain_size_histograms() -> dict[str, dict[str, Any]]:
                 if not isinstance(payload_rel, Mapping):
                     continue
                 status = _normalize_transition_status(payload_rel.get("status"))
-                if status in {"observed", "observed_and_inferred"}:
+                if status == "observed":
                     has_observed = True
                 if status == "inferred":
                     has_inferred = True
@@ -932,7 +951,6 @@ def plot_iswc_status_transitions_stacked() -> dict[str, dict[str, dict[str, floa
         "none",
         "observed",
         "inferred",
-        "observed_and_inferred",
         "repaired",
         "other",
     ]
@@ -940,7 +958,6 @@ def plot_iswc_status_transitions_stacked() -> dict[str, dict[str, dict[str, floa
         "none": "none",
         "observed": "observed",
         "inferred": "inferred",
-        "observed_and_inferred": "observed+inferred",
         "repaired": "repaired",
         "other": "other",
     }
@@ -948,7 +965,6 @@ def plot_iswc_status_transitions_stacked() -> dict[str, dict[str, dict[str, floa
         "none": "#9AA5B1",
         "observed": "#2E86AB",
         "inferred": "#F18F01",
-        "observed_and_inferred": "#5A9367",
         "repaired": "#C73E1D",
         "other": "#6C5B7B",
     }
@@ -1063,8 +1079,8 @@ def plot_iswc_status_transition_heatmaps() -> dict[str, dict[str, Any]]:
         "Q215380": "Musical Group",
         "Q82955": "Politician",
     }
-    status_order = ["none", "observed", "inferred", "observed_and_inferred"]
-    status_labels = ["none", "observed", "inferred", "observed+\ninferred"]
+    status_order = ["none", "observed", "inferred"]
+    status_labels = ["none", "observed", "inferred"]
     status_to_index = {status: index for index, status in enumerate(status_order)}
 
     transition_counts_per_dataset: dict[str, list[list[int]]] = {}
@@ -1675,7 +1691,7 @@ def plot_qcn3_domain_size_histograms(
 
         Domain size is the number of relations in a pair-domain:
         - observed size: count of relations with status in
-            {Observed, Inferred, Observed and inferred}; only domains with size > 0
+            {Observed, Inferred}; only domains with size > 0
             are kept in the observed histogram
     - inferred-only size: count of relations with status Inferred in after_propagation
       that are absent (or status None) in after_oracle.
@@ -1683,7 +1699,7 @@ def plot_qcn3_domain_size_histograms(
     Saves one figure per KG to:
     Results/<KG>/qcn3_domain_size_histograms_<KG>.png
     """
-    observed_statuses = {"Observed", "Inferred", "Observed and inferred"}
+    observed_statuses = {"Observed", "Inferred"}
 
     if kg_names is None:
         kg_names = [
@@ -1811,194 +1827,546 @@ def plot_qcn3_after_propagation_domain_size_histogram(
     kg_names: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
-    Plot one histogram per KG for after_propagation domain sizes.
+    Plot one histogram per threshold configuration for after_propagation
+    domain sizes stored under Results/New.
 
     Domain size = total number of relations present in each domain
     of the after_propagation section.
 
-    Saves one figure per KG to:
-    Results/<KG>/qcn3_after_propagation_domain_size_histogram_<KG>.png
+    Saves one figure next to each QCN input as:
+    Results/New/<KG>/<configuration>/qcn2_<KG>_domain_size_histogram.png
     """
+    new_results_root = results_root / "New"
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing New results directory: {new_results_root}")
+
     if kg_names is None:
-        kg_names = [
-            d.name
-            for d in results_root.iterdir()
-            if d.is_dir() and (d / f"qcn3_{d.name}.json").exists()
-        ]
+        kg_names = [directory.name for directory in new_results_root.iterdir() if directory.is_dir()]
     if not kg_names:
-        raise FileNotFoundError(f"No qcn3_<KG>.json files found under {results_root}")
+        raise FileNotFoundError(f"No knowledge-graph directories found under {new_results_root}")
 
     summary: dict[str, dict[str, Any]] = {}
 
     for kg_name in sorted(kg_names):
-        json_path = results_root / kg_name / f"qcn3_{kg_name}.json"
-        if not json_path.exists():
-            print(f"Warning: missing file {json_path}")
+        kg_directory = new_results_root / kg_name
+        if not kg_directory.is_dir():
+            print(f"Warning: missing directory {kg_directory}")
             continue
 
-        with json_path.open("r", encoding="UTF-8") as handle:
-            payload = json.load(handle)
-
-        after_propagation = payload.get("after_propagation", {})
-        if not isinstance(after_propagation, Mapping):
-            print(f"Warning: invalid after_propagation structure in {json_path}")
+        json_paths = sorted(kg_directory.glob(f"occ_*/qcn2_{kg_name}.json"))
+        if not json_paths:
+            print(f"Warning: no qcn2 result found under {kg_directory}")
             continue
 
-        domain_sizes: list[int] = []
-        for domain in after_propagation.values():
-            if not isinstance(domain, Mapping):
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
+
+            after_propagation = payload.get("after_propagation", {})
+            if not isinstance(after_propagation, Mapping):
+                print(f"Warning: invalid after_propagation structure in {json_path}")
                 continue
-            relations = domain.get("relations", {})
-            if isinstance(relations, Mapping):
-                domain_sizes.append(len(relations))
 
-        if not domain_sizes:
-            print(f"Warning: no valid domains found in {json_path}")
-            continue
+            domain_sizes: list[int] = []
+            inferred_domain_sizes: list[int] = []
+            for domain in after_propagation.values():
+                if not isinstance(domain, Mapping):
+                    continue
+                relations = domain.get("relations", {})
+                if isinstance(relations, Mapping):
+                    domain_size = len(relations)
+                    domain_sizes.append(domain_size)
+                    if domain.get("status") == "Inferred":
+                        inferred_domain_sizes.append(domain_size)
 
-        min_size = min(domain_sizes)
-        max_size = max(domain_sizes)
-        avg_size = sum(domain_sizes) / len(domain_sizes)
+            if not domain_sizes:
+                print(f"Warning: no valid domains found in {json_path}")
+                continue
 
-        x_sizes = list(range(min_size, max_size + 1))
-        counts = [0] * len(x_sizes)
-        for size in domain_sizes:
-            counts[size - min_size] += 1
+            min_size = min(domain_sizes)
+            max_size = max(domain_sizes)
+            avg_size = sum(domain_sizes) / len(domain_sizes)
 
-        fig, ax = plt.subplots(1, 1, figsize=(9, 5.5))
-        ax.bar(x_sizes, counts, color="#1F77B4", width=0.85)
-        ax.set_title(f"{kg_name} (qcn3) - After propagation domain sizes")
-        ax.set_xlabel("Domain size (#relations)")
-        ax.set_ylabel("Number of domains")
-        ax.set_xticks(x_sizes)
-        ax.grid(axis="y", linestyle="--", alpha=0.5)
+            x_sizes = list(range(min_size, max_size + 1))
+            counts = [0] * len(x_sizes)
+            inferred_counts = [0] * len(x_sizes)
+            for size in domain_sizes:
+                counts[size - min_size] += 1
+            for size in inferred_domain_sizes:
+                inferred_counts[size - min_size] += 1
 
-        subtitle = f"min={min_size}, max={max_size}, avg={avg_size:.2f}, n={len(domain_sizes)}"
-        ax.text(0.01, 0.98, subtitle, transform=ax.transAxes, va="top", ha="left")
+            configuration_name = json_path.parent.name
+            fig, ax = plt.subplots(1, 1, figsize=(9, 5.5))
+            ax.bar(x_sizes, counts, color="#1F77B4", width=0.85, label="All domains")
+            ax.bar(
+                x_sizes,
+                inferred_counts,
+                width=0.85,
+                facecolor="none",
+                edgecolor="black",
+                hatch="///",
+                linewidth=0.8,
+                label="Inferred domains",
+            )
+            ax.set_title(
+                f"{kg_name} - After propagation domain sizes\n{configuration_name}"
+            )
+            ax.set_xlabel("Domain size (#relations)")
+            ax.set_ylabel("Number of domains")
+            ax.set_yscale("log")
+            ax.set_xticks(x_sizes)
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.legend()
 
-        plt.tight_layout()
-        output_path = results_root / kg_name / f"qcn3_after_propagation_domain_size_histogram_{kg_name}.png"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150)
-        plt.close(fig)
-        print(f"After-propagation domain-size histogram saved to {output_path}")
+            subtitle = f"min={min_size}, max={max_size}, avg={avg_size:.2f}, n={len(domain_sizes)}"
+            ax.text(0.01, 0.98, subtitle, transform=ax.transAxes, va="top", ha="left")
 
-        summary[kg_name] = {
-            "sizes": x_sizes,
-            "counts": counts,
-            "num_domains": len(domain_sizes),
-            "min_size": min_size,
-            "max_size": max_size,
-            "avg_size": avg_size,
-        }
+            plt.tight_layout()
+            output_path = json_path.with_name(f"{json_path.stem}_domain_size_histogram.png")
+            plt.savefig(output_path, dpi=150)
+            plt.close(fig)
+            print(f"After-propagation domain-size histogram saved to {output_path}")
+
+            summary[f"{kg_name}/{configuration_name}"] = {
+                "sizes": x_sizes,
+                "counts": counts,
+                "inferred_counts": inferred_counts,
+                "num_domains": len(domain_sizes),
+                "num_inferred_domains": len(inferred_domain_sizes),
+                "min_size": min_size,
+                "max_size": max_size,
+                "avg_size": avg_size,
+                "output_path": str(output_path),
+            }
 
     return summary
 
-def plot_iswc_after_propagation_inferred_support_histogram(
-    bin_width: float = 0.10,
-) -> dict[str, Any]:
-    """
-    Build one global histogram of supports for relations in after_propagation
-    whose normalized status is exactly "inferred".
 
-    The figure is saved under Results/XXXX-1.
+def after_propagation_domain_sizes_statistics(
+    kg_names: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Summarize QCN2 files recursively under Results and write a CSV there.
+
+    Size statistics and informative percentages concern inferred domains only.
+    A nonempty inferred domain is informative if it has fewer than 13 relations,
+    or 13 relations with different inferred scores. Directed arcs are counted
+    separately, as stored in the QCN. Empty populations have undefined statistics
+    (None, written as empty CSV cells). Legacy filenames are also supported.
+    """
+    if not results_root.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {results_root}")
+
+    summary: dict[str, dict[str, Any]] = {}
+    requested = set(kg_names) if kg_names is not None else None
+    for json_path in sorted(results_root.rglob("qcn2_*.json")):
+        match = re.fullmatch(
+            r"qcn2_(Q[0-9]+)(?:_(non_reduced_composition|reduced_composition))?",
+            json_path.stem,
+        )
+        if match is None:
+            continue
+        kg_name, version = match.groups()
+        if requested is not None and kg_name not in requested:
+            continue
+        if version is None:
+            version = next(
+                (part for part in json_path.relative_to(results_root).parts[:-1]
+                 if part in {"reduced_composition", "non_reduced_composition"}),
+                "unknown",
+            )
+        configuration = json_path.parent.name
+        thresholds = re.fullmatch(
+            r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)",
+            configuration,
+        )
+        with json_path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, Mapping):
+            print(f"Warning: invalid QCN payload in {json_path}")
+            continue
+        oracle = payload.get("after_oracle")
+        propagated = payload.get("after_propagation")
+        if not isinstance(oracle, Mapping) or not isinstance(propagated, Mapping):
+            print(f"Warning: missing or invalid QCN stages in {json_path}")
+            continue
+
+        eligible = {
+            pair for pair, domain in oracle.items()
+            if isinstance(domain, Mapping) and domain.get("status") is None
+        }
+        sizes: list[int] = []
+        informative = 0
+        inferred_from_none = 0
+        for pair, domain in propagated.items():
+            if not isinstance(domain, Mapping) or domain.get("status") not in {"Inferred", "Infered"}:
+                continue
+            relations = domain.get("relations")
+            if not isinstance(relations, Mapping):
+                continue
+            size = len(relations)
+            sizes.append(size)  
+            inferred_from_none += pair in eligible
+            if 0 < size < len(ALLEN_RELATIONS):
+                informative += 1
+            elif size == len(ALLEN_RELATIONS):
+                scores = [
+                    relation.get("inferred_score")
+                    for relation in relations.values()
+                    if isinstance(relation, Mapping)
+                ]
+                if (len(scores) == size
+                    and all(isinstance(score, (int, float)) and not isinstance(score, bool)
+                            for score in scores)
+                    and len(set(scores)) > 1):
+                    informative += 1
+
+        relative_path = str(json_path.relative_to(results_root))
+        summary[relative_path] = {
+            "kg": kg_name,
+            #"configuration": configuration,
+            "version": version,
+            "occurence_thresh": float(thresholds[1].replace("p", ".")) if thresholds else None,
+            "support_thresh": int(thresholds[2]) if thresholds else None,
+            "n_domains (possible inferences)": len(eligible),
+            "n_inferred_domains": len(sizes),
+            "%inferred from none": f"{(inferred_from_none/ len(eligible))*100:.2f}",
+            "%domaines_informatifs": f"{(informative / len(sizes))*100:.2f}" if sizes else None,
+            "min_domain_sizes": min(sizes) if sizes else None,
+            "avg_domain_sizes": f"{statistics.mean(sizes):.2f}" if sizes else None,
+            "median_domain_sizes": f"{statistics.median(sizes):.2f}" if sizes else None,
+            "max_domain_sizes": f"{max(sizes):.2f}" if sizes else None,
+        }
+
+    if not summary:
+        print(f"Warning: no matching complete QCN2 results under {results_root}")
+        return summary
+    output_path = results_root / "after_propagation_domain_sizes_statistics.csv"
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["file", *next(iter(summary.values()))])
+        writer.writeheader()
+        for file, row in summary.items():
+            writer.writerow({"file": file, **row})
+    print(f"Statistics for {len(summary)} files written to {output_path}")
+    return summary
+
+
+def after_propagation_domain_inference_scores_statistics(
+    kg_names: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Print inference-score statistics and save them as CSV for informative inferred domains.
+
+    Compute min/max over relation scores per input file. The two averages
+    give each informative domain equal weight: mean of maxima and mean of means.
+    Informative domains have 1–12 relations, or 13 with distinct scores.
+    Domains with missing, nonnumeric or nonfinite scores are skipped and counted.
+    Directed arcs are counted separately. Empty populations yield None (empty CSV cells).
+    """
+    if not results_root.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {results_root}")
+
+    summary: dict[str, dict[str, Any]] = {}
+    requested = set(kg_names) if kg_names is not None else None
+    for json_path in sorted(results_root.rglob("qcn2_*.json")):
+        match = re.fullmatch(
+            r"qcn2_(Q[0-9]+)(?:_(non_reduced_composition|reduced_composition))?",
+            json_path.stem,
+        )
+        if match is None:
+            continue
+        kg_name, version = match.groups()
+        if requested is not None and kg_name not in requested:
+            continue
+        if version is None:
+            version = next(
+                (part for part in json_path.relative_to(results_root).parts[:-1]
+                 if part in {"reduced_composition", "non_reduced_composition"}),
+                "unknown",
+            )
+        configuration = json_path.parent.name
+        thresholds = re.fullmatch(
+            r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)",
+            configuration,
+        )
+        with json_path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, Mapping):
+            print(f"Warning: invalid QCN payload in {json_path}")
+            continue
+        propagated = payload.get("after_propagation")
+        if not isinstance(propagated, Mapping):
+            print(f"Warning: missing or invalid after_propagation in {json_path}")
+            continue
+
+        scores: list[float] = []
+        domain_maxima: list[float] = []
+        domain_means: list[float] = []
+        informative_domains = 0
+        invalid_domains = 0
+        for domain in propagated.values():
+            if not isinstance(domain, Mapping) or domain.get("status") not in {"Inferred", "Infered"}:
+                continue
+            relations = domain.get("relations")
+            if not isinstance(relations, Mapping):
+               
+                continue
+            if not relations:
+                continue
+            domain_scores = [
+                relation.get("inferred_score") if isinstance(relation, Mapping) else None
+                for relation in relations.values()
+            ]
+            if not all(
+                isinstance(score, (int, float)) and not isinstance(score, bool)
+                and math.isfinite(score)
+                for score in domain_scores
+            ):
+                continue
+            if (len(relations) < len(ALLEN_RELATIONS)
+                or (len(relations) == len(ALLEN_RELATIONS) and len(set(domain_scores)) > 1)):
+                informative_domains += 1
+                scores.extend(domain_scores)
+                domain_maxima.append(max(domain_scores))
+                domain_means.append(statistics.mean(domain_scores))
+
+        relative_path = str(json_path.relative_to(results_root))
+        summary[relative_path] = {
+            "kg": kg_name,
+            "version": version,
+            "occurence_thresh": float(thresholds[1].replace("p", ".")) if thresholds else None,
+            "support_thresh": int(thresholds[2]) if thresholds else None,
+            "min_inference_score": f"{min(scores):.2f}" if scores else None,
+            "avg_best_candidate_score": f"{statistics.mean(domain_maxima):.2f}" if domain_maxima else None,
+            "avg_domain_mean_score": f"{statistics.mean(domain_means):.2f}" if domain_means else None,
+            "max_inference_score": f"{max(scores):.2f}" if scores else None,
+        }
+
+    output_path = results_root / "after_propagation_domain_inference_scores_statistics.csv"
+    lines = [
+        "Inference scores — informative inferred domains only",
+        "Min/max over relation scores; averages of domain maxima and domain means. Directed arcs counted separately.",
+        "N/A: no scores. Domains with invalid scores are excluded.",
+        "",
+    ]
+    for file, row in summary.items():
+        lines.append(f"File: {file}")
+        for key, value in row.items():
+            formatted = "N/A" if value is None else f"{value:.6g}" if isinstance(value, float) else str(value)
+            lines.append(f"  {key}: {formatted}")
+        lines.append("")
+    if not summary:
+        lines.append("No matching QCN2 results with after_propagation found.")
+    report = "\n".join(lines) + "\n"
+    fieldnames = [
+        "file", "kg", "version", "occurence_thresh",
+        "support_thresh",
+        "min_inference_score", "avg_best_candidate_score", "avg_domain_mean_score", "max_inference_score",
+    ]
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for file, row in summary.items():
+            writer.writerow({"file": file, **row})
+    print(report, end="")
+    print(f"Statistics for {len(summary)} files written to {output_path}")
+    return summary
+
+
+def plot_qcn3_after_propagation_inferred_domain_size_histogram(
+    kg_names: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Plot one domain-size histogram per file for inferred domains only."""
+    new_results_root = results_root / "New"
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing New results directory: {new_results_root}")
+
+    if kg_names is None:
+        kg_names = [
+            directory.name
+            for directory in new_results_root.iterdir()
+            if directory.is_dir()
+        ]
+    if not kg_names:
+        raise FileNotFoundError(
+            f"No knowledge-graph directories found under {new_results_root}"
+        )
+
+    summary: dict[str, dict[str, Any]] = {}
+
+    for kg_name in sorted(kg_names):
+        kg_directory = new_results_root / kg_name
+        if not kg_directory.is_dir():
+            print(f"Warning: missing directory {kg_directory}")
+            continue
+
+        json_paths = sorted(kg_directory.glob(f"occ_*/qcn2_{kg_name}.json"))
+        if not json_paths:
+            print(f"Warning: no qcn2 result found under {kg_directory}")
+            continue
+
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
+
+            after_propagation = payload.get("after_propagation", {})
+            if not isinstance(after_propagation, Mapping):
+                print(f"Warning: invalid after_propagation structure in {json_path}")
+                continue
+
+            domain_sizes: list[int] = []
+            for domain in after_propagation.values():
+                if not isinstance(domain, Mapping):
+                    continue
+                if domain.get("status") != "Inferred":
+                    continue
+                relations = domain.get("relations")
+                if isinstance(relations, Mapping):
+                    domain_sizes.append(len(relations))
+
+            if not domain_sizes:
+                print(f"Warning: no inferred domains found in {json_path}")
+                continue
+
+            min_size = min(domain_sizes)
+            max_size = max(domain_sizes)
+            avg_size = sum(domain_sizes) / len(domain_sizes)
+            x_sizes = list(range(min_size, max_size + 1))
+            counts = [0] * len(x_sizes)
+            for size in domain_sizes:
+                counts[size - min_size] += 1
+
+            configuration_name = json_path.parent.name
+            fig, ax = plt.subplots(figsize=(9, 5.5))
+            ax.bar(x_sizes, counts, color="#F18F01", width=0.85)
+            ax.set_title(
+                f"{kg_name} - Inferred domain sizes after propagation\n"
+                f"{configuration_name}"
+            )
+            ax.set_xlabel("Domain size (#relations)")
+            ax.set_ylabel("Number of inferred domains")
+            ax.set_yscale("log")
+            ax.set_xticks(x_sizes)
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.text(
+                0.01,
+                0.98,
+                f"min={min_size}, max={max_size}, avg={avg_size:.2f}, "
+                f"n={len(domain_sizes)}",
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+            )
+
+            plt.tight_layout()
+            output_path = json_path.with_name(
+                f"{json_path.stem}_inferred_domain_size_histogram.png"
+            )
+            plt.savefig(output_path, dpi=150)
+            plt.close(fig)
+            print(f"Inferred domain-size histogram saved to {output_path}")
+
+            summary[f"{kg_name}/{configuration_name}"] = {
+                "sizes": x_sizes,
+                "counts": counts,
+                "num_domains": len(domain_sizes),
+                "min_size": min_size,
+                "max_size": max_size,
+                "avg_size": avg_size,
+                "output_path": str(output_path),
+            }
+
+    return summary
+
+
+def plot_iswc_after_propagation_inferred_support_histogram(
+    kg_names: list[str] | None = None,
+    bin_width: float = 0.10,
+) -> dict[str, dict[str, Any]]:
+    """
+    Build one inferred-score histogram per threshold configuration in
+    Results/New. Inferred relations store their score in ``inferred_score``.
+
+    Each figure is saved next to its QCN input.
     """
     if bin_width <= 0 or bin_width > 1:
         raise ValueError(f"bin_width must be in (0, 1], got {bin_width}")
 
-    iswc_root = results_root / "XXXX-1"
-    if not iswc_root.exists():
-        raise FileNotFoundError(f"Missing XXXX-1 results directory: {iswc_root}")
+    new_results_root = results_root / "New"
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing New results directory: {new_results_root}")
 
-    json_files = sorted(iswc_root.rglob("*.json"))
-    if not json_files:
-        raise FileNotFoundError(f"No JSON files found under: {iswc_root}")
+    if kg_names is None:
+        kg_names = [directory.name for directory in new_results_root.iterdir() if directory.is_dir()]
+    if not kg_names:
+        raise FileNotFoundError(f"No knowledge-graph directories found under {new_results_root}")
 
-    supports: list[float] = []
-    inferred_relations_per_kg: dict[str, int] = {}
-
-    for json_path in json_files:
-        rel_path = json_path.relative_to(iswc_root)
-        kg_name = rel_path.parts[0] if len(rel_path.parts) >= 2 else json_path.stem
-
-        with json_path.open("r", encoding="UTF-8") as handle:
-            payload = json.load(handle)
-
-        after_propagation = payload.get("after_propagation")
-        if not isinstance(after_propagation, Mapping):
-            continue
-
-        inferred_relations_per_kg.setdefault(kg_name, 0)
-
-        for raw_domain in after_propagation.values():
-            if not isinstance(raw_domain, Mapping):
-                continue
-
-            structured_relations = raw_domain.get("relations")
-            if not isinstance(structured_relations, Mapping):
-                continue
-
-            for relation_payload in structured_relations.values():
-                if not isinstance(relation_payload, Mapping):
-                    continue
-
-                status = _normalize_transition_status(relation_payload.get("status"))
-                if status != "inferred":
-                    continue
-
-                support = relation_payload.get("support")
-                if support is None or not isinstance(support, (int, float)):
-                    continue
-                support_value = float(support)
-                if 0.0 <= support_value <= 1.0:
-                    supports.append(support_value)
-                    inferred_relations_per_kg[kg_name] += 1
-
-    if not supports:
-        raise ValueError(
-            "No after_propagation relation with status 'inferred' and valid support in [0, 1]"
+    summary: dict[str, dict[str, Any]] = {}
+    for kg_name in sorted(kg_names):
+        json_paths = sorted(
+            (new_results_root / kg_name).glob(f"occ_*/qcn2_{kg_name}.json")
         )
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
 
-    edges, counts = _build_histogram_counts(supports, bin_width)
-    x_positions = edges[:-1]
+            after_propagation = payload.get("after_propagation")
+            if not isinstance(after_propagation, Mapping):
+                continue
 
-    fig, ax = plt.subplots(figsize=(11, 5.5))
-    ax.bar(
-        x_positions,
-        counts,
-        width=bin_width * 0.9,
-        align="edge",
-        color="#F18F01",
-        edgecolor="black",
-        linewidth=0.4,
-    )
+            inferred_scores: list[float] = []
+            for domain in after_propagation.values():
+                if not isinstance(domain, Mapping):
+                    continue
+                relations = domain.get("relations")
+                if not isinstance(relations, Mapping):
+                    continue
+                for relation_payload in relations.values():
+                    if not isinstance(relation_payload, Mapping):
+                        continue
+                    score = relation_payload.get("inferred_score")
+                    if isinstance(score, (int, float)) and 0.0 <= float(score) <= 1.0:
+                        inferred_scores.append(float(score))
 
-    tick_positions = [
-        round(i * bin_width, 10)
-        for i in range(int(round(1.0 / bin_width)) + 1)
-    ]
-    ax.set_xticks(tick_positions)
-    ax.set_xlim(0.0, 1.0)
-    ax.set_yscale("log")
-    ax.set_xlabel("Confidence score bin")
-    ax.set_ylabel("Count of inferred relations")
-    ax.set_title("After propagation - support distribution for inferred relations")
-    ax.grid(axis="y", linestyle="--", alpha=0.5)
+            if not inferred_scores:
+                print(f"Warning: no inferred scores found in {json_path}")
+                continue
 
-    plt.tight_layout()
-    output_path = iswc_root / "after_propagation_inferred_support_histogram.png"
-    plt.savefig(output_path, dpi=150)
-    plt.close(fig)
-    print(f"Inferred-support histogram saved to {output_path}")
+            edges, counts = _build_histogram_counts(inferred_scores, bin_width)
+            x_positions = edges[:-1]
+            configuration_name = json_path.parent.name
+            fig, ax = plt.subplots(figsize=(11, 5.5))
+            ax.bar(
+                x_positions,
+                counts,
+                width=bin_width * 0.9,
+                align="edge",
+                color="#F18F01",
+                edgecolor="black",
+                linewidth=0.4,
+            )
+            ax.set_xticks(edges)
+            ax.set_xlim(0.0, 1.0)
+            ax.set_yscale("log")
+            ax.set_xlabel("Inferred score bin")
+            ax.set_ylabel("Count of inferred relations")
+            ax.set_title(
+                f"{kg_name} - Inferred score distribution\n{configuration_name}"
+            )
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
 
-    return {
-        "bins": edges,
-        "counts": counts,
-        "total_inferred_relations": len(supports),
-        "inferred_relations_per_kg": inferred_relations_per_kg,
-        "json_files_seen": len(json_files),
-        "output_path": str(output_path),
-    }
+            plt.tight_layout()
+            output_path = json_path.with_name(f"{json_path.stem}_inferred_score_histogram.png")
+            plt.savefig(output_path, dpi=150)
+            plt.close(fig)
+            print(f"Inferred-score histogram saved to {output_path}")
+
+            summary[f"{kg_name}/{configuration_name}"] = {
+                "bins": edges,
+                "counts": counts,
+                "total_inferred_relations": len(inferred_scores),
+                "output_path": str(output_path),
+            }
+
+    return summary
 
 
 def checkConsistency(jsonfile: str, threshold: float = 1.0) -> bool:
@@ -2012,7 +2380,7 @@ def checkConsistency(jsonfile: str, threshold: float = 1.0) -> bool:
         for pair, domain in legacy_qcn.items():
             structured_qcn[pair] = {
                 "relations": {
-                    relation: {"support": float(score), "status": None}
+                    relation: {"support": (1, 1), "status": None}
                     for relation, score in domain.items()
                 }
             }
@@ -2029,45 +2397,940 @@ def checkConsistency(jsonfile: str, threshold: float = 1.0) -> bool:
     return path_consistency_classique(structured_qcn) is not None
 
 
+def Number_of_relevant_observed_domains(jsonfile: str | None = None) -> dict[str, int]:
+    """Print and return relevant observed-domain counts per JSON under Results.
 
+    Read thresholds from each file's parent configuration folder. Count an
+    Observed domain in after_oracle once if at least one relation meets both
+    thresholds (>=). Keys are file paths relative to Results. Skip files without
+    a configuration folder or an after_oracle mapping. Pass jsonfile to count
+    only that file; files outside Results use an absolute path as their key.
+    """
+    from .qcn_generator2 import support_counts
 
+    if jsonfile is None and not results_root.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {results_root}")
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Check consistency of a QCN from a JSON file.")
-    parser.add_argument("jsonfile", type=str, help="Path to the QCN JSON file.")
-    parser.add_argument("--threshold", type=float, default=1.0, help="Score threshold for consistency check.")
-    parser.add_argument(
-        "--incoherence-report",
-        action="store_true",
-        help="Generate a detailed report with contradictory triplets and incoherence path.",
+    counts_by_file = {}
+    json_paths = (
+        [Path(jsonfile).resolve()]
+        if jsonfile is not None
+        else sorted(path for path in results_root.rglob("*.json")
+                    if "MRR" not in path.relative_to(results_root).parts)
     )
-    parser.add_argument(
-        "--max-triplets",
-        type=int,
-        default=300,
-        help="Maximum number of contradictory triplets written in the report.",
-    )
-    parser.add_argument(
-        "--trace-tail",
-        type=int,
-        default=30,
-        help="Number of propagation steps kept before the collapse event.",
-    )
-    args = parser.parse_args()
-
-    if args.incoherence_report:
-        report = incoherence_report(
-            args.jsonfile,
-            threshold=args.threshold,
-            max_triplets=args.max_triplets,
-            trace_tail=args.trace_tail,
+    for json_path in json_paths:
+        thresholds = re.fullmatch(
+            r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)",
+            json_path.parent.name,
         )
-        print(f"Incoherence report written to: {report}")
+        if thresholds is None:
+            continue
+        occurrence_threshold = float(thresholds[1].replace("p", "."))
+        total_threshold = int(thresholds[2])
+        with json_path.open("r", encoding="UTF-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, Mapping):
+            continue
+        after_oracle = payload.get("after_oracle")
+        if not isinstance(after_oracle, Mapping):
+            continue
 
-    is_consistent = checkConsistency(args.jsonfile, threshold=args.threshold)
-    if is_consistent:
-        print("The QCN is consistent.")
-    else:
-        print("The QCN is inconsistent.")
+        count = 0
+        for domain in after_oracle.values():
+            if not isinstance(domain, Mapping) or domain.get("status") != "Observed":
+                continue
+            relations = domain.get("relations")
+            if not isinstance(relations, Mapping):
+                continue
+            for relation in relations.values():
+                if not isinstance(relation, Mapping):
+                    continue
+                support = support_counts(relation.get("support"))
+                if (
+                    support is not None
+                    and support[1] > 0
+                    and support[1] >= total_threshold
+                    and support[0] / support[1] >= occurrence_threshold
+                ):
+                    count += 1
+                    break
 
+        try:
+            relative_path = str(json_path.resolve().relative_to(results_root.resolve()))
+        except ValueError:
+            relative_path = str(json_path.resolve())
+        counts_by_file[relative_path] = count
+        #print(f"{relative_path}: {count}")
+
+    return counts_by_file
+
+
+
+
+def _ablation_relation_counts(
+    observed_domains, inferred_domains, occurrence, total, *, missing_records=None,
+):
+    """Count qualifying directed-pair/Allen-relation targets and missing scores.
+
+    Finite numeric scores (including zero) count as predictions at any rank.
+    Apply the same positive-evidence thresholds as the weighted MRR.
+    If supplied, append missing targets and their original support counts to
+    missing_records: support = (relation occurrences, property-pair occurrences).
+    """
+    from .qcn_generator2 import support_counts
+
+    observed = missing = 0
+    for pair, domain in observed_domains.items():
+        predictions = inferred_domains.get(pair, {}).get("relations", {})
+        for relation, evidence in domain["relations"].items():
+            counts = support_counts(evidence.get("support"))
+            if (counts is None or counts[1] <= 0 or counts[1] < total
+                    or counts[0] <= 0 or counts[0] / counts[1] < occurrence):
+                continue
+            observed += 1
+            score = predictions.get(relation, {}).get("inferred_score")
+            if not (isinstance(score, (int, float))
+                    and not isinstance(score, bool) and math.isfinite(score)):
+                missing += 1
+                if missing_records is not None:
+                    missing_records.append({
+                        "property_pair": pair,
+                        "relation": relation,
+                        "property_pair_occurrence": counts[1],
+                        "relation_occurrence": counts[0],
+                        "occurrence_ratio": counts[0] / counts[1],
+                    })
+    return observed, missing
+
+
+def ablation_study_of_inference(
+    jsonfile: str, n: int, *, seed: int | None = None,
+    return_details: bool = False,
+) -> float | dict[str, Any] | None:
+    '''
+    Return the mean weighted reciprocal rank over ten ablation rounds.
+
+    Keep domains from after_oracle with an evidence total at least ``total``
+    and at least one occurrence ratio at least ``occurence``.
+    Read both thresholds from the parent folder named
+    ``occ_<ratio>_min_<total>_timeout_<seconds>`` (decimal separator: p or .).
+    Sample n domains without replacement, preserve their original values,
+    mask their evidence, and propagate again in each round. Evaluate all
+    selected domains against their original observations, then average the
+    scores over predicted domains pooled across rounds. Each domain is sampled
+    in at most one round, requiring
+    at least 10 * n eligible domains. Use seed to reproduce the samples.
+    Skip QCNs with fewer than 100 eligible domains and return None.
+    Otherwise, return zero when n is zero.
+    With return_details, include eligible observed domains/relations and
+    cumulative masked/unreached domains and missing relations over ten rounds.
+    Directed pairs are counted separately, following the sampling protocol.
+    Archive complete masked and inferred QCNs for every round, ground truth,
+    parameters and summary under Results/MRR/<dataset>/<configuration>/.
+    A new invocation replaces the previous files for the same configuration.
+    '''
+    from .qcn_generator2 import (
+        propagateAndFilterConservative, propagateAndFilterTwoStage,
+        propagateAndFilterIterative, support_counts,
+    )
+
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("n must be a non-negative integer")
+
+    configuration = Path(jsonfile).resolve().parent.name
+    thresholds = re.fullmatch(
+        r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)",
+        configuration,
+    )
+    if thresholds is None:
+        raise ValueError(f"Invalid threshold configuration folder: {configuration}")
+    occurence = float(thresholds[1].replace("p", "."))
+    total = int(thresholds[2])
+
+    # load json file
+    with open(jsonfile, "r", encoding="UTF-8") as handle:
+        payload = json.load(handle)
+
+    after_oracle = payload.get("after_oracle")
+    if not isinstance(after_oracle, Mapping):
+        raise ValueError(f"Missing or invalid 'after_oracle' section in {jsonfile}")
+
+    # get a pool of observed domains observed more than total times
+    observed_domains = {}
+    for pair, domain in after_oracle.items():
+        if not isinstance(domain, Mapping) or domain.get("status") != "Observed":
+            continue
+        relations = domain.get("relations")
+        if not isinstance(relations, Mapping):
+            continue
+        counts = [
+            counts
+            for relation in relations.values()
+            if isinstance(relation, Mapping)
+            and (counts := support_counts(relation.get("support"))) is not None
+        ]
+        if any(count[1] >= total for count in counts):
+            observed_domains[pair] = (domain, counts)
+
+    # Keep domains with at least one occurrence ratio greater or equal than the threshold.
+    retained_domains = {
+        pair: domain
+        for pair, (domain, counts) in observed_domains.items()
+        if any(
+            count[1] > 0 and count[1] >= total and count[0] / count[1] >= occurence
+            for count in counts
+        )
+    }
+    valid_domain_count = len(retained_domains)
+    observed_relation_count, _ = _ablation_relation_counts(
+        retained_domains, {}, occurence, total,
+    )
+    if valid_domain_count < 100:
+        print(
+            f"Skipping ablation for {jsonfile}: {valid_domain_count} valid observed "
+            "domains (at least 100 required)"
+        )
+        return None
+
+    num_rounds = 10
+    if num_rounds * n > len(retained_domains):
+        raise ValueError(
+            f"Cannot select {n} distinct domains per round for {num_rounds} rounds: "
+            f"need {num_rounds * n}, but only {len(retained_domains)} are eligible"
+        )
+    source = Path(jsonfile).resolve()
+    dataset_match = re.search(r"qcn2_(Q[0-9]+)(?:_|$)", source.stem)
+    dataset = dataset_match[1] if dataset_match else source.parent.parent.name
+    archive = results_root / "MRR" / dataset / configuration
+    archive.mkdir(parents=True, exist_ok=True)
+    # Remove only generated files so an interrupted or empty rerun cannot
+    # leave stale rounds or a previous successful summary in this directory.
+    for previous in archive.iterdir():
+        if previous.is_file() and (
+            previous.name in {"metadata.json", "summary.json", "results.csv", "missing_relations.json"}
+            or re.fullmatch(r"round_[0-9]+_(masked|inferred)\.json", previous.name)
+        ):
+            previous.unlink()
+    metadata = {
+        "source_json": str(source), "dataset": dataset,
+        "configuration": configuration, "seed": seed,
+        "n_per_round": n, "num_rounds": num_rounds if n else 0,
+        "occurrence_threshold": occurence, "total_threshold": total,
+        "counting_unit": "directed pair / Allen relation",
+    }
+
+    def save_json(name, data):
+        (archive / name).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+
+    missing_records = []
+
+    def finish(details):
+        save_json("missing_relations.json", {
+            **metadata,
+            "n_masked_relations": details["n_masked_relations"],
+            "n_missing_relations": details["n_missing_relations"],
+            "missing_relations": missing_records,
+        })
+        save_json("summary.json", {**metadata, **details})
+        with (archive / "results.csv").open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(details))
+            writer.writeheader()
+            writer.writerow(details)
+        return details if return_details else details["mrr"]
+
+    save_json("metadata.json", metadata)
+    if n == 0:
+        return finish({
+            "mrr": 0.0, "n_observed": valid_domain_count,
+            "n_observed_relations": observed_relation_count,
+            "n_masked": 0, "n_unreached": 0,
+            "n_masked_relations": 0, "n_missing_relations": 0,
+        })
+
+    rng = random.Random(seed)
+    available_pairs = list(retained_domains)
+    all_inferred_domains = {}
+    all_selected_domains = {}
+    for epoch in range(num_rounds):
+        # Selectionner uniformement sans remise n domains et les enregistrer quelque part
+        selected_pairs = rng.sample(available_pairs, n)
+        selected_pair_set = set(selected_pairs)
+        available_pairs = [
+            pair for pair in available_pairs if pair not in selected_pair_set
+        ]
+        selected_domains = {
+            pair: copy.deepcopy(retained_domains[pair]) for pair in selected_pairs
+        }
+
+        # Mettre les domaines selectionnés à un statu None dans after_oracle et toutes les valeurs de support a zero
+        masked_after_oracle = copy.deepcopy(after_oracle)
+        for pair in selected_pairs:
+            domain = masked_after_oracle[pair]
+            domain["status"] = None
+            for relation in domain["relations"].values():
+                relation["support"] = [0, 0]
+
+        # Appeler Propagate and filter sur le after_oracle modifié
+        qcn = {}
+        for pair, domain in masked_after_oracle.items():
+            if "___" not in pair:
+                raise ValueError(f"Invalid QCN pair key: {pair}")
+            qcn[tuple(pair.split("___", 1))] = domain
+        reduced_composition = (
+            "reduced_composition" in Path(jsonfile).resolve().parts
+            or Path(jsonfile).stem.endswith("_reduced_composition")
+            and not Path(jsonfile).stem.endswith("_non_reduced_composition")
+        )
+        path_parts = Path(jsonfile).resolve().parts
+        if "Iterative" in path_parts or "fix_point" in path_parts:
+            propagate = propagateAndFilterIterative
+        elif "two_stage" in path_parts:
+            propagate = propagateAndFilterTwoStage
+        else:
+            propagate = propagateAndFilterConservative
+        metadata.update({"propagation": propagate.__name__,
+                         "reduced_composition": reduced_composition})
+        save_json("metadata.json", metadata)
+        save_json(f"round_{epoch + 1:02d}_masked.json", {
+            "round": epoch + 1, "selected_pairs": selected_pairs,
+            "ground_truth": selected_domains, "masked_qcn": masked_after_oracle,
+        })
+        propagated_qcn = propagate(
+            qcn,
+            domain_reliability_threshold=total,
+            relation_occurrence_threshold=occurence,
+            reduced_composition=reduced_composition,
+        )
+        save_json(f"round_{epoch + 1:02d}_inferred.json", {
+            "round": epoch + 1, "selected_pairs": selected_pairs,
+            "inferred_qcn": {"___".join(pair): domain
+                             for pair, domain in propagated_qcn.items()},
+        })
+        # Compare every selected domain after propagation with its oracle values.
+        inferred_domains = { # recuperer les domaines masqués apres propagation
+            pair: propagated_qcn.get(tuple(pair.split("___", 1)), {})
+            for pair in selected_pairs
+        }
+        round_missing = []
+        _ablation_relation_counts(
+            selected_domains, inferred_domains, occurence, total,
+            missing_records=round_missing,
+        )
+        missing_records.extend({"round": epoch + 1, **record} for record in round_missing)
+        all_inferred_domains.update(inferred_domains)
+        all_selected_domains.update(selected_domains)
+
+    score = weighted_mean_reciprocal_rank_evaluation(
+        all_inferred_domains, all_selected_domains, occurence, total,
+    )
+    unreached = sum(
+        not any(
+            isinstance(evidence.get("inferred_score"), (int, float))
+            and not isinstance(evidence["inferred_score"], bool)
+            and math.isfinite(evidence["inferred_score"])
+            for evidence in domain.get("relations", {}).values()
+        )
+        for domain in all_inferred_domains.values()
+    )
+    masked_relations, missing_relations = _ablation_relation_counts(
+        all_selected_domains, all_inferred_domains, occurence, total,
+    )
+    return finish({
+        "mrr": score, "n_observed": valid_domain_count,
+        "n_observed_relations": observed_relation_count,
+        "n_masked": len(all_selected_domains), "n_unreached": unreached,
+        "n_masked_relations": masked_relations,
+        "n_missing_relations": missing_relations,
+    })
+
+
+def run_ablation_studies_of_inference(
+    n: int = 10, *, seed: int | None = 42
+) -> dict[str, float]:
+    """Run conservative-only ten-round ablations on eligible QCNs under Results.
+
+    Exclude two_stage, iterative, fix_point and strass directories. Legacy
+    paths without a propagation-mode directory use conservative propagation.
+
+    Skip files with fewer than 100 valid observed domains or fewer than 10 * n
+    domains for disjoint samples. Print and return scores keyed by relative
+    file path. The same seed makes each QCN's experiment reproducible.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("n must be a non-negative integer")
+
+    scores = {}
+    reports = []
+    required_domains = max(100, 10 * n)
+    for relative_path, count in Number_of_relevant_observed_domains().items():
+        path_parts = {part.lower() for part in (results_root / relative_path).resolve().parts}
+        if path_parts & {"two_stage", "iterative", "fix_point", "strass"}:
+            continue
+        if count < required_domains:
+            print(
+                f"Skipping ablation for {relative_path}: {count} valid observed "
+                f"domains (at least {required_domains} required)"
+            )
+            continue
+        details = ablation_study_of_inference(
+            str(results_root / relative_path), n=n, seed=seed, return_details=True
+        )
+        if details is not None:
+            score = details["mrr"]
+            scores[relative_path] = score
+            reports.append({"file": relative_path, **details})
+            print(
+                f"{relative_path}: non atteints = {details['n_unreached']}/{details['n_masked']} "
+                f"(cumul 10 epochs) | observed domains = {details['n_observed']} "
+                f"| observed relations = {details['n_observed_relations']} "
+                f"| missing relations = {details['n_missing_relations']}/{details['n_masked_relations']} "
+                f"| weighted MRR = {score}"
+            )
+        else:
+            print(f"{relative_path}: ablation study returned None")
+    if reports:
+        with (results_root / "ablation_inference_counts.csv").open(
+            "w", encoding="utf-8", newline=""
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(reports[0]))
+            writer.writeheader()
+            writer.writerows(reports)
+    return scores
+
+
+def evaluate_two_stage_inference(
+    inferred_domains: dict, observed_domains: dict,
+    occurences: float, total: int,
+) -> dict[str, Any]:
+    """Evaluate masked domains globally and by their inference stage.
+
+    Reuse the support-weighted filtered MRR. Stage means are conditional on
+    being inferred in that stage; empty groups have an undefined mean (None).
+    Unrecovered domains are excluded from the global mean. Each supplied
+    observed domain must have positive evidence qualifying under the thresholds.
+    """
+    scores = []
+    stage_scores = {1: [], 2: []}
+    for pair, observed in observed_domains.items():
+        prediction = inferred_domains.get(pair, {})
+        has_prediction = any(
+            isinstance(evidence.get("inferred_score"), (int, float))
+            and not isinstance(evidence["inferred_score"], bool)
+            and math.isfinite(evidence["inferred_score"])
+            for evidence in prediction.get("relations", {}).values()
+        )
+        if prediction.get("status") == "Inferred" and has_prediction:
+            stage = prediction.get("inference_stage")
+            if type(stage) is not int or stage not in stage_scores:
+                raise ValueError(f"Missing or invalid inference_stage for {pair}")
+            score = weighted_mean_reciprocal_rank_evaluation(
+                {pair: prediction}, {pair: observed}, occurences, total,
+            )
+            stage_scores[stage].append(score)
+        else:
+            continue
+        scores.append(score)
+    return {
+        "n_masked": len(observed_domains),
+        "n_stage_1": len(stage_scores[1]),
+        "n_stage_2": len(stage_scores[2]),
+        "n_uninferred": len(observed_domains) - len(stage_scores[1]) - len(stage_scores[2]),
+        "mrr_global": statistics.mean(scores) if scores else None,
+        "mrr_stage_1": statistics.mean(stage_scores[1]) if stage_scores[1] else None,
+        "mrr_stage_2": statistics.mean(stage_scores[2]) if stage_scores[2] else None,
+    }
+
+
+def ablation_study_two_stage(
+    jsonfile: str, n: int = 10, *, seed: int | None = 42,
+    reduced_composition: bool = True,
+) -> dict[str, Any] | None:
+    """Run ten disjoint rounds, masking n property pairs and their converses.
+
+    Evaluate one direction per pair to avoid double counting. Every round
+    starts from the original after_oracle. Always use TwoStage regardless of
+    the folder name. Stage scores are pooled by domain across rounds, rather
+    than averaging stage means from differently sized groups.
+    """
+    from .qcn_generator2 import propagateAndFilterTwoStage, support_counts
+
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+        raise ValueError("n must be a positive integer")
+    path = Path(jsonfile)
+    thresholds = re.fullmatch(
+        r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)", path.parent.name,
+    )
+    if thresholds is None:
+        raise ValueError(f"Invalid threshold configuration folder: {path.parent.name}")
+    occurrence, total = float(thresholds[1].replace("p", ".")), int(thresholds[2])
+    with path.open(encoding="utf-8") as handle:
+        payload = json.load(handle)
+    oracle = payload.get("after_oracle")
+    if not isinstance(oracle, Mapping):
+        raise ValueError(f"Missing or invalid after_oracle in {path}")
+    qcn = {}
+    for key, domain in oracle.items():
+        if "___" not in key:
+            raise ValueError(f"Invalid QCN pair key: {key}")
+        qcn[tuple(key.split("___", 1))] = domain
+    eligible = {}
+    for pair, domain in sorted(qcn.items()):
+        if domain.get("status") != "Observed":
+            continue
+        if any(
+            counts is not None and counts[0] > 0 and counts[1] >= total
+            and counts[0] / counts[1] >= occurrence
+            for evidence in domain["relations"].values()
+            for counts in [support_counts(evidence.get("support"))]
+        ):
+            canonical = tuple(sorted(pair))
+            if (pair[1], pair[0]) not in qcn:
+                raise ValueError(f"Missing converse for {pair}")
+            eligible.setdefault(canonical, pair)
+    if len(eligible) < 10 * n:
+        print(f"Skipping ablation for {path}: {len(eligible)} eligible property pairs; {10 * n} required")
+        return None
+    samples = random.Random(seed).sample(list(eligible.values()), 10 * n)
+    all_predictions, all_observations, rounds = {}, {}, []
+    for epoch in range(10):
+        selected = samples[epoch * n:(epoch + 1) * n]
+        masked = copy.deepcopy(qcn)
+        for a, b in selected:
+            for pair in ((a, b), (b, a)):
+                masked[pair] = {
+                    "status": None,
+                    "relations": {relation: {"support": (0, 0)} for relation in ALLEN_RELATIONS},
+                }
+        propagated = propagateAndFilterTwoStage(masked, total, occurrence, reduced_composition)
+        observed = {pair: qcn[pair] for pair in selected}
+        predictions = {pair: propagated[pair] for pair in selected}
+        rounds.append(evaluate_two_stage_inference(predictions, observed, occurrence, total))
+        all_predictions.update(predictions)
+        all_observations.update(observed)
+    summary = evaluate_two_stage_inference(all_predictions, all_observations, occurrence, total)
+    summary.update({"rounds": rounds, "seed": seed, "reduced_composition": reduced_composition})
+    return summary
+
+
+def run_two_stage_ablation_studies(
+    n: int = 10, *, seed: int | None = 42,
+) -> dict[str, dict[str, Any]]:
+    """Evaluate QCN2 files under results_root and save a CSV plus per-round JSON."""
+    if not results_root.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {results_root}")
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+        raise ValueError("n must be a positive integer")
+    summaries = {}
+    for path in sorted(results_root.rglob("qcn2_*.json")):
+        summary = ablation_study_two_stage(str(path), n, seed=seed)
+        if summary is None:
+            continue
+        relative = str(path.relative_to(results_root))
+        summaries[relative] = summary
+        print(f"{relative}: " + " | ".join(
+            f"{key}={value}" for key, value in summary.items() if key != "rounds"
+        ), flush=True)
+    fields = ["file", "n_masked", "n_stage_1", "n_stage_2", "n_uninferred",
+              "mrr_global", "mrr_stage_1", "mrr_stage_2", "seed", "reduced_composition"]
+    with (results_root / "two_stage_ablation.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for path, summary in summaries.items():
+            writer.writerow({"file": path, **{k: v for k, v in summary.items() if k != "rounds"}})
+    (results_root / "two_stage_ablation.json").write_text(
+        json.dumps(summaries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+    )
+    return summaries
+
+
+def weighted_mean_reciprocal_rank_evaluation(
+    inferred_domains: dict,
+    observed_domains: dict,
+    occurences: float,
+    total: int,
+) -> float:
+    """Average the support-weighted filtered reciprocal ranks over domains.
+
+    Both mappings must use the same pair keys. Observed relations qualify when
+    their support ratio >= occurences and evidence total >= total. Normalize
+    those ratios into weights within each domain. Rank by inferred_score,
+    excluding other qualifying observed relations and averaging tied ranks.
+    Skip domains without valid predictions or without positive observed weight;
+    return zero if no domain qualifies. Inputs are left unchanged.
+    """
+    from .qcn_generator2 import support_counts
+
+    domain_scores = []
+    for pair, domain in observed_domains.items(): # pour chaque pair masquée
+        # Retain only relations meeting both thresholds.
+        weights = {}
+        for relation, evidence in domain["relations"].items():
+            counts = support_counts(evidence.get("support")) # calcul du support
+            if counts is None or counts[1] == 0 or counts[1] < total:
+                continue
+            ratio = counts[0] / counts[1]
+            if ratio > 0 and ratio >= occurences:
+                weights[relation] = counts[0] # garder le nombre d'occurrences de la relation
+
+        # Normalize observed supports within the domain.
+        weight_sum = sum(weights.values()) # somme des nbr d'occurences des relations dans le domaine
+        if weight_sum == 0:
+            continue
+        # calculer le poids de la relation (servira dans la pondération du rang)
+        weights = {relation: weight / weight_sum for relation, weight in weights.items()}
+
+        # Récupérer le domaine inféré correspondant et trier par score inféré.
+        inferred_relations = inferred_domains.get(pair, {}).get("relations", {})
+        ranked_relations = sorted(
+            (
+                (relation, evidence["inferred_score"])
+                for relation, evidence in inferred_relations.items()
+                if isinstance(evidence.get("inferred_score"), (int, float))
+                and not isinstance(evidence["inferred_score"], bool)
+                and math.isfinite(evidence["inferred_score"])
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if not ranked_relations: # passer si le domaine n'est pas atteint par l'inference
+            continue
+        inferred_scores = dict(ranked_relations)
+
+        # Filter out the other expected relations for each target's rank
+        domain_score = 0.0
+        for relation, weight in weights.items():
+            if relation not in inferred_scores: # Si une relation est dans le GT mais pas inférée
+                continue # equivalent a un RR = 0 
+            score = inferred_scores[relation]
+            competitors = [
+                other_score
+                for other_relation, other_score in ranked_relations
+                if other_relation not in weights
+            ]
+            rank = (
+                1
+                + sum(other_score > score for other_score in competitors)
+                + 0.5 * sum(other_score == score for other_score in competitors)
+            )
+            domain_score += weight / rank # on multiplie le rang par le weight
+        domain_scores.append(domain_score)
+
+    return sum(domain_scores) / len(domain_scores) if domain_scores else 0.0
+
+
+    
+
+
+def propagation_rate() -> dict[str, float | None]:
+    """Print and return propagation rates for JSON files recursively under Results.
+
+    Divide the number of Inferred domains after propagation by the number of
+    None (or missing-status) domains after the oracle. Count directed domains
+    separately. A zero denominator yields None; files missing either QCN
+    section are skipped.
+    """
+    if not results_root.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {results_root}")
+
+    rates: dict[str, float | None] = {}
+    for json_path in sorted(results_root.rglob("*.json")):
+        with json_path.open("r", encoding="UTF-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, Mapping):
+            continue
+        after_oracle = payload.get("after_oracle")
+        after_propagation = payload.get("after_propagation")
+        if not isinstance(after_oracle, Mapping) or not isinstance(after_propagation, Mapping):
+            continue
+
+        unknown_count = sum(
+            1 for domain in after_oracle.values()
+            if isinstance(domain, Mapping) and domain.get("status") is None
+        )
+        inferred_count = sum(
+            1 for domain in after_propagation.values()
+            if isinstance(domain, Mapping) and domain.get("status") == "Inferred"
+        )
+        rate = inferred_count / unknown_count if unknown_count else None
+        relative_path = str(json_path.relative_to(results_root))
+        rates[relative_path] = rate
+        formatted_rate = f"{rate:.2%}" if rate is not None else "undefined"
+        database_match = re.match(r"qcn2_(Q[0-9]+)(?:_|$)", json_path.stem)
+        database = database_match[1] if database_match else next(
+            (part for part in reversed(json_path.resolve().parts[:-1])
+             if re.fullmatch(r"Q[0-9]+", part)),
+            "inconnue",
+        )
+        thresholds = re.fullmatch(
+            r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)",
+            json_path.parent.name,
+        )
+        occurrence = f"{float(thresholds[1].replace('p', '.')):g}" if thresholds else "inconnu"
+        minimum = str(int(thresholds[2])) if thresholds else "inconnu"
+        print(
+            f"BDD={database} | seuil occurrence={occurrence} | seuil support={minimum}: "
+            f"{inferred_count}/{unknown_count} = {formatted_rate}"
+        )
+
+    return rates
+
+
+def number_of_unknown_domains_after_propagation() -> dict[str, int]:
+    """Print and return unknown-domain counts for JSON files under Results.
+
+    Count each directed domain in ``after_propagation`` whose status is neither
+    ``Observed`` nor ``Inferred``, including null or missing statuses. Files
+    without an after-propagation QCN are skipped.
+    """
+    if not results_root.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {results_root}")
+
+    counts: dict[str, int] = {}
+    for json_path in sorted(results_root.rglob("*.json")):
+        with json_path.open("r", encoding="UTF-8") as handle:
+            payload = json.load(handle)
+
+        after_propagation = (
+            payload.get("after_propagation") if isinstance(payload, Mapping) else None
+        )
+        if not isinstance(after_propagation, Mapping):
+            continue
+
+        count = sum(
+            1
+            for domain in after_propagation.values()
+            if isinstance(domain, Mapping)
+            and domain.get("status") not in ("Observed", "Inferred")
+        )
+        relative_path = str(json_path.relative_to(results_root))
+        counts[relative_path] = count
+        print(f"{relative_path}: {count}")
+
+    return counts
+
+
+
+
+
+
+
+
+
+def number_of_distinct_scores_indomains(
+    kg_names: list[str] | None = None,
+    *,
+    mode: str = "New",
+) -> dict[str, dict[int, int]]:
+    '''
+    Return counts of inferred domains by distinct inferred-score count (1 to 13).
+
+    Counts are aggregated across all matching JSON files for each KG.
+    Set mode to "reduced_composition" or "non_reduced_composition" to
+    read the corresponding Results subdirectory; None selects all KGs.
+    '''
+    new_results_root = results_root / mode
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing results directory: {new_results_root}")
+
+    if kg_names is None:
+        kg_names = [directory.name for directory in new_results_root.iterdir() if directory.is_dir()]
+    if not kg_names:
+        raise FileNotFoundError(f"No knowledge-graph directories found under {new_results_root}")
+    counts_by_kg: dict[str, dict[int, int]] = {}
+    for kg_name in sorted(kg_names):
+        counts = dict.fromkeys(range(1, 14), 0)
+        counts_by_kg[kg_name] = counts
+        json_paths = sorted(
+            {
+                path
+                for filename in (f"qcn2_{kg_name}.json", f"qcn2_{kg_name}_{mode}.json")
+                for path in (new_results_root / kg_name).glob(f"occ_*/{filename}")
+            }
+        )
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
+
+            after_propagation = payload.get("after_propagation")
+            if not isinstance(after_propagation, Mapping):
+                continue
+            for domain in after_propagation.values():
+                if not isinstance(domain, Mapping) or domain.get("status") != "Inferred":
+                    continue
+                relations = domain.get("relations")
+                if not isinstance(relations, Mapping):
+                    continue
+                distinct_scores = {
+                    relation["inferred_score"]
+                    for relation in relations.values()
+                    if isinstance(relation, Mapping)
+                    and isinstance(relation.get("inferred_score"), (int, float))
+                    and not isinstance(relation["inferred_score"], bool)
+                }
+                if len(distinct_scores) in counts:
+                    counts[len(distinct_scores)] += 1
+
+    return counts_by_kg
+
+
+
+
+def numberOfNoneDomains(kg_names: list[str] | None = None) -> None:
+    '''
+    After propagation, count domains having a None status for each JSON file.
+    '''
+    new_results_root = results_root / "New"
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing New results directory: {new_results_root}")
+
+    if kg_names is None:
+        kg_names = [directory.name for directory in new_results_root.iterdir() if directory.is_dir()]
+    if not kg_names:
+        raise FileNotFoundError(f"No knowledge-graph directories found under {new_results_root}")
+    for kg_name in sorted(kg_names):
+        json_paths = sorted(
+            (new_results_root / kg_name).glob(f"occ_*/qcn2_{kg_name}.json")
+        )
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
+
+            after_propagation = payload.get("after_propagation")
+            if not isinstance(after_propagation, Mapping):
+                continue
+            count = sum(
+                1
+                for domain in after_propagation.values()
+                if isinstance(domain, Mapping) and domain.get("status") is None
+            )
+            print(f"{json_path.relative_to(new_results_root)}: {count}")
+
+
+
+def numberOfDomainslessof13(kg_names: list[str] | None = None) -> None:
+    '''
+    After propagation, count domains having less than 13 relations for each JSON file.
+    '''
+    new_results_root = results_root / "New"
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing New results directory: {new_results_root}")
+
+    if kg_names is None:
+        kg_names = [directory.name for directory in new_results_root.iterdir() if directory.is_dir()]
+    if not kg_names:
+        raise FileNotFoundError(f"No knowledge-graph directories found under {new_results_root}")
+    for kg_name in sorted(kg_names):
+        json_paths = sorted(
+            (new_results_root / kg_name).glob(f"occ_*/qcn2_{kg_name}.json")
+        )
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
+
+            after_propagation = payload.get("after_propagation")
+            if not isinstance(after_propagation, Mapping):
+                continue
+            count = sum(
+                1
+                for domain in after_propagation.values()
+                if isinstance(domain, Mapping) and domain.get("status") == "Inferred" and len(domain.get("relations", {})) < 13
+            )
+            print(f"{json_path.relative_to(new_results_root)}: {count}")
+
+def exploitableInferredDomains(kg_names: list[str] | None = None) -> None:
+    '''
+    After propagation, count exploitable inferred domains for each JSON file.
+    '''
+    new_results_root = results_root / "New"
+    if not new_results_root.exists():
+        raise FileNotFoundError(f"Missing New results directory: {new_results_root}")
+
+    if kg_names is None:
+        kg_names = [directory.name for directory in new_results_root.iterdir() if directory.is_dir()]
+    if not kg_names:
+        raise FileNotFoundError(f"No knowledge-graph directories found under {new_results_root}")
+    for kg_name in sorted(kg_names):
+        json_paths = sorted(
+            (new_results_root / kg_name).glob(f"occ_*/qcn2_{kg_name}.json")
+        )
+        for json_path in json_paths:
+            with json_path.open("r", encoding="UTF-8") as handle:
+                payload = json.load(handle)
+
+            after_propagation = payload.get("after_propagation")
+            if not isinstance(after_propagation, Mapping):
+                continue
+            total_count = 0
+            exploitable_domains = 0
+            for domain in after_propagation.values():
+                if not isinstance(domain, Mapping) or domain.get("status") != "Inferred":
+                    continue
+
+                total_count += 1
+                relations = domain.get("relations")
+                if not isinstance(relations, Mapping):
+                    continue
+                inferred_scores = sorted(
+                    (
+                        float(relation["inferred_score"])
+                        for relation in relations.values()
+                        if isinstance(relation, Mapping)
+                        and isinstance(relation.get("inferred_score"), (int, float))
+                        and not isinstance(relation.get("inferred_score"), bool)
+                    ),
+                    reverse=True,
+                )
+                if (
+                    len(inferred_scores) >= 2
+                    and inferred_scores[0] - inferred_scores[1] >= 0.3
+                ):
+                    exploitable_domains += 1
+
+            print(
+                f"{json_path.relative_to(new_results_root)}: "
+                f"{exploitable_domains}/{total_count} exploitable inferred domains"
+            )
+
+
+                    
+#if __name__ == "__main__":
+    after_propagation_domain_sizes_statistics()
+    #exploitableInferredDomains()
+    # parser = argparse.ArgumentParser(description="Check consistency of a QCN from a JSON file.")
+    # parser.add_argument("jsonfile", type=str, help="Path to the QCN JSON file.")
+    # parser.add_argument("--threshold", type=float, default=1.0, help="Score threshold for consistency check.")
+    # parser.add_argument(
+    #     "--incoherence-report",
+    #     action="store_true",
+    #     help="Generate a detailed report with contradictory triplets and incoherence path.",
+    # )
+    # parser.add_argument(
+    #     "--max-triplets",
+    #     type=int,
+    #     default=300,
+    #     help="Maximum number of contradictory triplets written in the report.",
+    # )
+    # parser.add_argument(
+    #     "--trace-tail",
+    #     type=int,
+    #     default=30,
+    #     help="Number of propagation steps kept before the collapse event.",
+    # )
+    # args = parser.parse_args()
+
+    # if args.incoherence_report:
+    #     report = incoherence_report(
+    #         args.jsonfile,
+    #         threshold=args.threshold,
+    #         max_triplets=args.max_triplets,
+    #         trace_tail=args.trace_tail,
+    #     )
+    #     print(f"Incoherence report written to: {report}")
+
+    # is_consistent = checkConsistency(args.jsonfile, threshold=args.threshold)
+    # if is_consistent:
+    #     print("The QCN is consistent.")
+    # else:
+    #     print("The QCN is inconsistent.")

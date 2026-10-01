@@ -118,3 +118,39 @@ def test_inference_scores_only_use_informative_domains(tmp_path, monkeypatch, ca
     assert csv_rows["non_reduced_composition"]["min_inference_score"] == ""
     assert "min_inference_score: 0.2" in capsys.readouterr().out
     assert rexp.after_propagation_domain_inference_scores_statistics(["Q99"]) == {}
+
+
+def test_conservative_domain_status_statistics(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(rexp, "results_root", tmp_path)
+    relative = "Q42/reduced_composition/occ_0_min_0_timeout_600/qcn2_Q42.json"
+    path = tmp_path / "conservative" / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "after_oracle": {"a___b": {"status": "Observed"}},
+        "after_propagation": {
+            "a___b": {"status": "Observed"},
+            "b___a": {"status": "Observed"},
+            "a___c": {"status": "Inferred"},
+            "c___a": {"status": None},
+            "b___c": {},
+            "c___b": {"status": "Unknown"},
+        },
+    }))
+    (path.parent / "empty.json").write_text(json.dumps({"after_propagation": {}}))
+    (path.parent / "metadata.json").write_text(json.dumps({"initial": {}}))
+    outside = tmp_path / "other.json"
+    outside.write_text(path.read_text())
+
+    result = rexp.conservative_domain_status_statistics()
+
+    assert len(result) == 2
+    assert result[relative] == {
+        "total_domains": 6,
+        "observed_count": 2, "observed_percentage": 100 / 3,
+        "inferred_count": 1, "inferred_percentage": 100 / 6,
+        "unknown_count": 3, "unknown_percentage": 50,
+    }
+    empty = result[relative.rsplit("/", 1)[0] + "/empty.json"]
+    assert empty["total_domains"] == 0
+    assert all(empty[f"{category}_percentage"] is None
+               for category in ("observed", "inferred", "unknown"))

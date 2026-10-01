@@ -20,6 +20,15 @@ def test_relation_counts_distinguish_missing_relations_from_wrong_predictions():
         }}}
         assert rexp._ablation_relation_counts(observed, predicted, 0.5, 10) == (2, missing)
     assert rexp._ablation_relation_counts(observed, {}, 0.5, 11) == (0, 0)
+    for predictions in ({}, {"before": {"inferred_score": None}},
+                        {"before": {"inferred_score": float("nan")}},
+                        {"before": {"inferred_score": False}}):
+        records = []
+        assert rexp._ablation_relation_counts(
+            observed, {"a": {"relations": predictions}}, 0.5, 10,
+            missing_records=records,
+        ) == (2, 0)
+        assert records == []
 
 
 def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
@@ -52,32 +61,36 @@ def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
     assert {k: int(row[k]) for k in row if k.startswith("n_")} == {
         "n_observed": 100, "n_observed_relations": 200,
         "n_masked": 10, "n_unreached": 5,
-        "n_masked_relations": 20, "n_missing_relations": 15,
+        "n_masked_relations": 20, "n_missing_relations": 5,
     }
     archive = tmp_path / "MRR/Q42/occ_0p5_min_10_timeout_600"
     summary = json.loads((archive / "summary.json").read_text())
     assert summary["mrr"] == 0.5
-    assert summary["n_missing_relations"] == 15
+    assert summary["n_missing_relations"] == 5
+    masked_rounds = json.loads((archive / "masked_rounds.json").read_text())
+    inferred_rounds = json.loads((archive / "inferred_rounds.json").read_text())
     missing = json.loads((archive / "missing_relations.json").read_text())
     assert missing["n_masked_relations"] == 20
-    assert missing["n_missing_relations"] == len(missing["missing_relations"]) == 15
+    assert missing["n_missing_relations"] == len(missing["missing_relations"]) == 5
     for record in missing["missing_relations"]:
         assert record["property_pair_occurrence"] == 10
         assert record["relation_occurrence"] == 5
         assert record["occurrence_ratio"] == 0.5
-        assert record["relation"] in ({"meets"} if record["round"] <= 5 else {"before", "meets"})
-        original = json.loads((archive / f"round_{record['round']:02d}_masked.json").read_text())
+        assert record["round"] <= 5
+        assert record["relation"] == "meets"
+        original = masked_rounds[record["round"] - 1]
         assert record["property_pair"] in original["selected_pairs"]
     assert summary["seed"] == 42
     assert summary["source_json"] == str(path)
     assert summary["reduced_composition"] is True
     assert (archive / "results.csv").is_file()
-    assert len(list(archive.glob("round_*_masked.json"))) == 10
-    assert len(list(archive.glob("round_*_inferred.json"))) == 10
+    assert len(masked_rounds) == len(inferred_rounds) == 10
+    assert not list(archive.glob("round_*.json"))
     selected = set()
     for i in range(1, 11):
-        masked = json.loads((archive / f"round_{i:02d}_masked.json").read_text())
-        inferred = json.loads((archive / f"round_{i:02d}_inferred.json").read_text())
+        masked = masked_rounds[i - 1]
+        inferred = inferred_rounds[i - 1]
+        assert masked["round"] == inferred["round"] == i
         pair, = masked["selected_pairs"]
         assert pair not in selected
         selected.add(pair)
@@ -98,12 +111,14 @@ def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
     log.write_text(capsys.readouterr().out)
     parsed = ablation_tables.parse_results(log)
     table = ablation_tables.build_latex_table("Q42", parsed["Q42"])
-    assert "0.500 & 200 & 15/20" in table
+    assert "0.500 & 200 & 5/20" in table
     assert "Miss./Mask." in table
     other_configuration = archive.parent / "occ_0p9_min_10_timeout_600"
     other_configuration.mkdir()
     (other_configuration / "summary.json").write_text('{"mrr": 0.9}')
     (archive / "notes.txt").write_text("keep")
+    (archive / "round_01_masked.json").write_text("{}")
+    (archive / "round_01_inferred.json").write_text("{}")
     zero = rexp.ablation_study_of_inference(str(path), 0, return_details=True)
     assert zero["n_observed_relations"] == 200
     assert zero["n_masked_relations"] == zero["n_missing_relations"] == 0
@@ -111,6 +126,8 @@ def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
     assert not list(archive.glob("round_*.json"))
     assert json.loads((archive / "missing_relations.json").read_text())["missing_relations"] == []
     assert json.loads((archive / "summary.json").read_text())["n_masked"] == 0
+    assert json.loads((archive / "masked_rounds.json").read_text()) == []
+    assert json.loads((archive / "inferred_rounds.json").read_text()) == []
     assert (archive / "notes.txt").read_text() == "keep"
     assert json.loads((other_configuration / "summary.json").read_text()) == {"mrr": 0.9}
 

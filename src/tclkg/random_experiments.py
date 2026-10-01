@@ -2472,6 +2472,8 @@ def _ablation_relation_counts(
 ):
     """Count qualifying directed-pair/Allen-relation targets and missing scores.
 
+    Count missing relations only in domains with at least one valid prediction.
+    The observed total still includes qualifying relations in unreached domains.
     Finite numeric scores (including zero) count as predictions at any rank.
     Apply the same positive-evidence thresholds as the weighted MRR.
     If supplied, append missing targets and their original support counts to
@@ -2482,12 +2484,20 @@ def _ablation_relation_counts(
     observed = missing = 0
     for pair, domain in observed_domains.items():
         predictions = inferred_domains.get(pair, {}).get("relations", {})
+        reached = any(
+            isinstance(payload.get("inferred_score"), (int, float))
+            and not isinstance(payload["inferred_score"], bool)
+            and math.isfinite(payload["inferred_score"])
+            for payload in predictions.values()
+        )
         for relation, evidence in domain["relations"].items():
             counts = support_counts(evidence.get("support"))
             if (counts is None or counts[1] <= 0 or counts[1] < total
                     or counts[0] <= 0 or counts[0] / counts[1] < occurrence):
                 continue
             observed += 1
+            if not reached:
+                continue
             score = predictions.get(relation, {}).get("inferred_score")
             if not (isinstance(score, (int, float))
                     and not isinstance(score, bool) and math.isfinite(score)):
@@ -2607,7 +2617,8 @@ def ablation_study_of_inference(
     # leave stale rounds or a previous successful summary in this directory.
     for previous in archive.iterdir():
         if previous.is_file() and (
-            previous.name in {"metadata.json", "summary.json", "results.csv", "missing_relations.json"}
+            previous.name in {"metadata.json", "summary.json", "results.csv", "missing_relations.json",
+                              "masked_rounds.json", "inferred_rounds.json"}
             or re.fullmatch(r"round_[0-9]+_(masked|inferred)\.json", previous.name)
         ):
             previous.unlink()
@@ -2625,6 +2636,10 @@ def ablation_study_of_inference(
         )
 
     missing_records = []
+    masked_rounds = []
+    inferred_rounds = []
+    save_json("masked_rounds.json", masked_rounds)
+    save_json("inferred_rounds.json", inferred_rounds)
 
     def finish(details):
         save_json("missing_relations.json", {
@@ -2693,21 +2708,23 @@ def ablation_study_of_inference(
         metadata.update({"propagation": propagate.__name__,
                          "reduced_composition": reduced_composition})
         save_json("metadata.json", metadata)
-        save_json(f"round_{epoch + 1:02d}_masked.json", {
+        masked_rounds.append(copy.deepcopy({
             "round": epoch + 1, "selected_pairs": selected_pairs,
             "ground_truth": selected_domains, "masked_qcn": masked_after_oracle,
-        })
+        }))
+        save_json("masked_rounds.json", masked_rounds)
         propagated_qcn = propagate(
             qcn,
             domain_reliability_threshold=total,
             relation_occurrence_threshold=occurence,
             reduced_composition=reduced_composition,
         )
-        save_json(f"round_{epoch + 1:02d}_inferred.json", {
+        inferred_rounds.append(copy.deepcopy({
             "round": epoch + 1, "selected_pairs": selected_pairs,
             "inferred_qcn": {"___".join(pair): domain
                              for pair, domain in propagated_qcn.items()},
-        })
+        }))
+        save_json("inferred_rounds.json", inferred_rounds)
         # Compare every selected domain after propagation with its oracle values.
         inferred_domains = { # recuperer les domaines masqués apres propagation
             pair: propagated_qcn.get(tuple(pair.split("___", 1)), {})
@@ -2744,6 +2761,274 @@ def ablation_study_of_inference(
         "n_masked_relations": masked_relations,
         "n_missing_relations": missing_relations,
     })
+
+
+def ablation_study_of_inference_all_domains(
+    jsonfile: str, *, seed: int | None = None,
+    return_details: bool = False,
+) -> float | dict[str, Any] | None:
+    """Evaluate all valid observed domains in ten disjoint ablation folds.
+
+    Keep the original ablation eligibility, masking and weighted MRR rules.
+    Group eligible directed pairs with their converse, shuffle the groups and
+    split them into ten balanced folds. Each epoch masks approximately 10%
+    of the groups, including both directions. Every eligible directed pair
+    is evaluated once. Remainders go to the first folds. For fewer than ten
+    groups, some folds are empty. No minimum of 100 is imposed.
+    Return None for no eligible domains. Seed controls reproducibility.
+    Archive results separately under Results/MRR_all_domains/<dataset>/
+    <composition>/<configuration>/; repeated calls replace this run's files.
+    """
+    from .qcn_generator2 import (
+        propagateAndFilterConservative, propagateAndFilterTwoStage,
+        propagateAndFilterIterative, support_counts,
+    )
+
+    configuration = Path(jsonfile).resolve().parent.name
+    thresholds = re.fullmatch(
+        r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)",
+        configuration,
+    )
+    if thresholds is None:
+        raise ValueError(f"Invalid threshold configuration folder: {configuration}")
+    occurence = float(thresholds[1].replace("p", "."))
+    total = int(thresholds[2])
+
+    # load json file
+    with open(jsonfile, "r", encoding="UTF-8") as handle:
+        payload = json.load(handle)
+
+    after_oracle = payload.get("after_oracle")
+    if not isinstance(after_oracle, Mapping):
+        raise ValueError(f"Missing or invalid 'after_oracle' section in {jsonfile}")
+
+    # get a pool of observed domains observed more than total times
+    observed_domains = {}
+    for pair, domain in after_oracle.items():
+        if not isinstance(domain, Mapping) or domain.get("status") != "Observed":
+            continue
+        relations = domain.get("relations")
+        if not isinstance(relations, Mapping):
+            continue
+        counts = [
+            counts
+            for relation in relations.values()
+            if isinstance(relation, Mapping)
+            and (counts := support_counts(relation.get("support"))) is not None
+        ]
+        if any(count[1] >= total for count in counts):
+            observed_domains[pair] = (domain, counts)
+
+    # Keep domains with at least one occurrence ratio greater or equal than the threshold.
+    retained_domains = {
+        pair: domain
+        for pair, (domain, counts) in observed_domains.items()
+        if any(
+            count[1] > 0 and count[1] >= total and count[0] / count[1] >= occurence
+            for count in counts
+        )
+    }
+    valid_domain_count = len(retained_domains)
+    observed_relation_count, _ = _ablation_relation_counts(
+        retained_domains, {}, occurence, total,
+    )
+    if valid_domain_count == 0:
+        print(f"Skipping ablation for {jsonfile}: no valid observed domains")
+        return None
+
+    num_rounds = 10
+    rng = random.Random(seed)
+    pair_groups = {}
+    for pair in retained_domains:
+        if "___" not in pair:
+            raise ValueError(f"Invalid QCN pair key: {pair}")
+        group = tuple(sorted(pair.split("___", 1)))
+        pair_groups.setdefault(group, []).append(pair)
+    shuffled_groups = list(pair_groups.values())
+    rng.shuffle(shuffled_groups)
+    base_size, remainder = divmod(len(shuffled_groups), num_rounds)
+    group_sizes = [base_size + (epoch < remainder) for epoch in range(num_rounds)]
+    folds = []
+    offset = 0
+    for size in group_sizes:
+        folds.append([pair for group in shuffled_groups[offset:offset + size] for pair in group])
+        offset += size
+    fold_sizes = [len(fold) for fold in folds]
+    source = Path(jsonfile).resolve()
+    dataset_match = re.search(r"qcn2_(Q[0-9]+)(?:_|$)", source.stem)
+    dataset = dataset_match[1] if dataset_match else source.parent.parent.name
+    archive = results_root / "MRR_all_domains" / dataset / source.parent.parent.name / configuration
+    archive.mkdir(parents=True, exist_ok=True)
+    # Remove only generated files so an interrupted or empty rerun cannot
+    # leave stale rounds or a previous successful summary in this directory.
+    for previous in archive.iterdir():
+        if previous.is_file() and (
+            previous.name in {"metadata.json", "summary.json", "results.csv", "missing_relations.json",
+                              "masked_rounds.json", "inferred_rounds.json"}
+            or re.fullmatch(r"round_[0-9]+_(masked|inferred)\.json", previous.name)
+        ):
+            previous.unlink()
+    metadata = {
+        "source_json": str(source), "dataset": dataset,
+        "configuration": configuration, "seed": seed,
+        "n_per_round": fold_sizes, "num_rounds": num_rounds,
+        "mask_fraction": 0.1, "sampling": "ten disjoint folds of converse pairs",
+        "converse_groups_per_round": group_sizes,
+        "occurrence_threshold": occurence, "total_threshold": total,
+        "counting_unit": "directed pair / Allen relation",
+    }
+
+    def save_json(name, data):
+        (archive / name).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+
+    missing_records = []
+    masked_rounds = []
+    inferred_rounds = []
+    save_json("masked_rounds.json", masked_rounds)
+    save_json("inferred_rounds.json", inferred_rounds)
+
+    def finish(details):
+        save_json("missing_relations.json", {
+            **metadata,
+            "n_masked_relations": details["n_masked_relations"],
+            "n_missing_relations": details["n_missing_relations"],
+            "missing_relations": missing_records,
+        })
+        save_json("summary.json", {**metadata, **details})
+        with (archive / "results.csv").open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(details))
+            writer.writeheader()
+            writer.writerow(details)
+        return details if return_details else details["mrr"]
+
+    save_json("metadata.json", metadata)
+    all_inferred_domains = {}
+    all_selected_domains = {}
+    for epoch, selected_pairs in enumerate(folds):
+        selected_domains = {
+            pair: copy.deepcopy(retained_domains[pair]) for pair in selected_pairs
+        }
+
+        # Mettre les domaines selectionnés à un statu None dans after_oracle et toutes les valeurs de support a zero
+        masked_after_oracle = copy.deepcopy(after_oracle)
+        masked_pairs = set(selected_pairs)
+        for pair in selected_pairs:
+            p1, p2 = pair.split("___", 1)
+            converse = f"{p2}___{p1}"
+            if converse in masked_after_oracle:
+                masked_pairs.add(converse)
+        for pair in sorted(masked_pairs):
+            domain = masked_after_oracle[pair]
+            domain["status"] = None
+            for relation in domain["relations"].values():
+                relation["support"] = [0, 0]
+                relation.pop("inferred_score", None)
+
+        # Appeler Propagate and filter sur le after_oracle modifié
+        qcn = {}
+        for pair, domain in masked_after_oracle.items():
+            if "___" not in pair:
+                raise ValueError(f"Invalid QCN pair key: {pair}")
+            qcn[tuple(pair.split("___", 1))] = domain
+        reduced_composition = (
+            "reduced_composition" in Path(jsonfile).resolve().parts
+            or Path(jsonfile).stem.endswith("_reduced_composition")
+            and not Path(jsonfile).stem.endswith("_non_reduced_composition")
+        )
+        path_parts = Path(jsonfile).resolve().parts
+        if "Iterative" in path_parts or "fix_point" in path_parts:
+            propagate = propagateAndFilterIterative
+        elif "two_stage" in path_parts:
+            propagate = propagateAndFilterTwoStage
+        else:
+            propagate = propagateAndFilterConservative
+        metadata.update({"propagation": propagate.__name__,
+                         "reduced_composition": reduced_composition})
+        save_json("metadata.json", metadata)
+        masked_rounds.append(copy.deepcopy({
+            "round": epoch + 1, "selected_pairs": selected_pairs,
+            "masked_pairs": sorted(masked_pairs),
+            "ground_truth": selected_domains, "masked_qcn": masked_after_oracle,
+        }))
+        save_json("masked_rounds.json", masked_rounds)
+        propagated_qcn = propagate(
+            qcn,
+            domain_reliability_threshold=total,
+            relation_occurrence_threshold=occurence,
+            reduced_composition=reduced_composition,
+        ) if selected_pairs else qcn
+        inferred_rounds.append(copy.deepcopy({
+            "round": epoch + 1, "selected_pairs": selected_pairs,
+            "inferred_qcn": {"___".join(pair): domain
+                             for pair, domain in propagated_qcn.items()},
+        }))
+        save_json("inferred_rounds.json", inferred_rounds)
+        # Compare every selected domain after propagation with its oracle values.
+        inferred_domains = { # recuperer les domaines masqués apres propagation
+            pair: propagated_qcn.get(tuple(pair.split("___", 1)), {})
+            for pair in selected_pairs
+        }
+        round_missing = []
+        _ablation_relation_counts(
+            selected_domains, inferred_domains, occurence, total,
+            missing_records=round_missing,
+        )
+        missing_records.extend({"round": epoch + 1, **record} for record in round_missing)
+        all_inferred_domains.update(inferred_domains)
+        all_selected_domains.update(selected_domains)
+
+    score = weighted_mean_reciprocal_rank_evaluation(
+        all_inferred_domains, all_selected_domains, occurence, total,
+    )
+    unreached = sum(
+        not any(
+            isinstance(evidence.get("inferred_score"), (int, float))
+            and not isinstance(evidence["inferred_score"], bool)
+            and math.isfinite(evidence["inferred_score"])
+            for evidence in domain.get("relations", {}).values()
+        )
+        for domain in all_inferred_domains.values()
+    )
+    masked_relations, missing_relations = _ablation_relation_counts(
+        all_selected_domains, all_inferred_domains, occurence, total,
+    )
+    return finish({
+        "mrr": score, "n_observed": valid_domain_count,
+        "n_observed_relations": observed_relation_count,
+        "n_masked": len(all_selected_domains), "n_unreached": unreached,
+        "n_masked_relations": masked_relations,
+        "n_missing_relations": missing_relations,
+    })
+
+
+def run_ablation_studies_of_inference_all_domains(
+    qid: str, *, seed: int | None = 42,
+) -> dict[str, dict[str, Any] | None]:
+    """Run the all-domain ablation for one QID under Results/conservative.
+
+    Return details keyed by relative source path (None for no valid domains).
+    Per-configuration archives are written by the all-domain ablation.
+    """
+    if not isinstance(qid, str) or re.fullmatch(r"Q[0-9]+", qid) is None:
+        raise ValueError("qid must be a dataset identifier such as Q6256")
+    directory = results_root / "conservative" / qid
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {directory}")
+    files = sorted(directory.rglob(f"qcn2_{qid}_*.json"))
+    if not files:
+        raise FileNotFoundError(f"No QCN result files found in {directory}")
+    reports = {}
+    for source in files:
+        relative = source.relative_to(results_root).as_posix()
+        print(f"Processing {relative}", flush=True)
+        details = ablation_study_of_inference_all_domains(
+            str(source), seed=seed, return_details=True,
+        )
+        reports[relative] = details
+        print(f"{relative}: {details}", flush=True)
+    return reports
 
 
 def run_ablation_studies_of_inference(
@@ -3075,6 +3360,118 @@ def propagation_rate() -> dict[str, float | None]:
         )
 
     return rates
+
+
+
+def conservative_cpu_time_statistics() -> dict[str, Path]:
+    """Write one TSV tempscpu_Qxxx.txt per dataset in Results/conservative.
+
+    Include every existing configuration directory, even without a stats file.
+    Missing stage timings are written as TO (timeout convention). Only the
+    CPU TIME PER STAGE section is read, excluding cumulative/global timings.
+    Configurations with no directory cannot be discovered by this function.
+    Return the output paths indexed by dataset QID. Times are in seconds.
+    """
+    directory = results_root / "conservative"
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {directory}")
+
+    configuration_re = re.compile(
+        r"^occ_([0-9]+(?:p[0-9]+)?)_min_(\d+)_timeout_(\d+)$"
+    )
+    stage_re = re.compile(
+        r"^Stage (after_oracle|after_propagation) \(s\)\s*:\s*"
+        r"([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\s*(?:s)?\s*$"
+    )
+    outputs = {}
+    for dataset in sorted(directory.iterdir()):
+        if not dataset.is_dir() or not re.fullmatch(r"Q\d+", dataset.name):
+            continue
+        rows = []
+        for configuration in dataset.rglob("occ_*"):
+            match = configuration_re.fullmatch(configuration.name)
+            if not configuration.is_dir() or match is None:
+                continue
+            occurrence, minimum, timeout = match.groups()
+            composition = configuration.parent.relative_to(dataset).as_posix()
+            timings = {"after_oracle": "TO", "after_propagation": "TO"}
+            stats_files = sorted(configuration.glob("*_stats.txt"))
+            if len(stats_files) > 1:
+                raise ValueError(f"Multiple statistics files in {configuration}")
+            if stats_files:
+                in_section = False
+                for line in stats_files[0].read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line.startswith("## "):
+                        in_section = line == "## CPU TIME PER STAGE"
+                        continue
+                    stage = stage_re.fullmatch(line) if in_section else None
+                    if stage:
+                        timings[stage.group(1)] = stage.group(2)
+            rows.append({
+                "configuration": configuration.relative_to(dataset).as_posix(),
+                "composition": composition,
+                "tau_c": float(occurrence.replace("p", ".")),
+                "tau": int(minimum),
+                "timeout_s": int(timeout),
+                "after_oracle_cpu_s": timings["after_oracle"],
+                "after_propagation_cpu_s": timings["after_propagation"],
+            })
+        rows.sort(key=lambda row: (
+            row["composition"], row["tau_c"], row["tau"], row["timeout_s"]
+        ))
+        output = directory / f"tempscpu_{dataset.name}.txt"
+        with output.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, delimiter="\t", fieldnames=[
+                "configuration", "composition", "tau_c", "tau", "timeout_s",
+                "after_oracle_cpu_s", "after_propagation_cpu_s",
+            ])
+            writer.writeheader()
+            writer.writerows(rows)
+        outputs[dataset.name] = output
+        print(f"{output}: {len(rows)} configurations")
+    return outputs
+
+
+def conservative_domain_status_statistics() -> dict[str, dict[str, int | float | None]]:
+    """Return domain counts and percentages per conservative result file.
+
+    Keys are file paths relative to Results/conservative, identifying the KG,
+    composition mode and configuration. Use all directed domains in
+    ``after_propagation`` as the denominator. Statuses other than ``Observed``
+    and ``Inferred`` (including null or missing) count as unknown.
+    Percentages range from 0 to 100; they are None for an empty QCN.
+    Files without an after-propagation QCN are skipped.
+    """
+    directory = results_root / "conservative"
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Missing results directory: {directory}")
+
+    statistics_by_configuration: dict[str, dict[str, int | float | None]] = {}
+    for json_path in sorted(directory.rglob("*.json")):
+        with json_path.open("r", encoding="UTF-8") as handle:
+            payload = json.load(handle)
+        domains = payload.get("after_propagation") if isinstance(payload, Mapping) else None
+        if not isinstance(domains, Mapping):
+            continue
+
+        counts = {"observed": 0, "inferred": 0, "unknown": 0}
+        for pair, domain in domains.items():
+            if not isinstance(domain, Mapping):
+                raise ValueError(f"Invalid domain for {pair} in {json_path}")
+            category = {"Observed": "observed", "Inferred": "inferred"}.get(
+                domain.get("status"), "unknown"
+            )
+            counts[category] += 1
+
+        total = len(domains)
+        row: dict[str, int | float | None] = {"total_domains": total}
+        for category, count in counts.items():
+            row[f"{category}_count"] = count
+            row[f"{category}_percentage"] = 100 * count / total if total else None
+        statistics_by_configuration[str(json_path.relative_to(directory))] = row
+
+    return statistics_by_configuration
 
 
 def number_of_unknown_domains_after_propagation() -> dict[str, int]:

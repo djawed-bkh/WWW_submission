@@ -74,7 +74,7 @@ def build_latex_table(dataset, entries, caption=None, label=None):
     occs = sorted({k[0] for k in entries})
     caption = caption or (f"Weighted MRR ablation results for {dataset}. "
                           "Obs.: eligible observed Allen relations; Miss./Mask.: missing "
-                          "predictions over masked relations, summed over ten rounds. "
+                          "relations in reached domains over all masked relations, summed over ten rounds. "
                           "Directed pairs are counted separately; -- means unavailable.")
     label = label or f"tab:ablation_{dataset.lower()}"
 

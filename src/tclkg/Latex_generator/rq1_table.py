@@ -22,10 +22,10 @@
 #     if x is None:
 #         return "--"
 #     if x == 0:
-#         return "0.0"
-#     if x < 0.1:
-#         return "$<$0.1"
-#     return f"{x:.1f}"
+#         return "0.00"
+#     if x < 0.01:
+#         return "$<$0.01"
+#     return f"{x:.2f}"
 
 
 # def fmt_tau_c(x):
@@ -63,7 +63,7 @@
 # L.append(r"\toprule")
 # L.append(" & " + "\n & ".join(rf"\multicolumn{{3}}{{c}}{{{name}}}" for _, name in DATASETS) + r"\\")
 # L.append(" & " + "\n & ".join(rf"\multicolumn{{3}}{{c}}{{{fmt_int(meta[q][0])} dom.}}" for q, _ in DATASETS) + r"\\")
-# L.append(" & " + "\n & ".join(rf"\multicolumn{{3}}{{c}}{{Obs.\ {meta[q][1]:.1f}\%}}" for q, _ in DATASETS) + r"\\")
+# L.append(" & " + "\n & ".join(rf"\multicolumn{{3}}{{c}}{{Obs.\ {meta[q][1]:.2f}\%}}" for q, _ in DATASETS) + r"\\")
 # cmid = []
 # for i in range(len(DATASETS)):
 #     a, b = 2 + 3 * i, 4 + 3 * i
@@ -93,7 +93,7 @@
 # L.append("}")
 # L.append(r"\caption{\small Proportion (\%) of observed (Obs.), inferred (Inf.) and unknown (Unk.), "
 #          r"w.r.t.\ $\tau_c$ and $\tau$. The observed proportion (Obs.), independent of $(\tau_c,\tau)$, "
-#          r"is given under each dataset name. ``--'': run not available; $<$0.1: non-zero but below 0.1\%.}")
+#          r"is given under each dataset name. ``--'': run not available; $<$0.01: non-zero but below 0.01\%.}")
 # L.append(r"\label{tab:rq1}")
 # L.append(r"\end{table}")
 
@@ -126,10 +126,10 @@ def fmt_pct(x):
     if x is None:
         return "--"
     if x == 0:
-        return "0.0"
-    if x < 0.1:
-        return "$<$0.1"
-    return f"{x:.1f}"
+        return "0.00"
+    if x < 0.01:
+        return "$<$0.01"
+    return f"{x:.2f}"
 
 
 def fmt_int(n):
@@ -168,7 +168,7 @@ L.append(r"\begin{tabular}{@{}" + " ".join(["rrr"] * len(DATASETS)) + r"@{}}")
 L.append(r"\toprule")
 L.append("\n & ".join(rf"\multicolumn{{3}}{{c}}{{{name}}}" for _, name in DATASETS) + r"\\")
 L.append("\n & ".join(rf"\multicolumn{{3}}{{c}}{{{fmt_int(meta[q][0])} dom.}}" for q, _ in DATASETS) + r"\\")
-L.append("\n & ".join(rf"\multicolumn{{3}}{{c}}{{Obs.\ {meta[q][1]:.1f}\%}}" for q, _ in DATASETS) + r"\\")
+L.append("\n & ".join(rf"\multicolumn{{3}}{{c}}{{Obs.\ {meta[q][1]:.2f}\%}}" for q, _ in DATASETS) + r"\\")
 cmid = []
 for i in range(len(DATASETS)):
     a, b = 1 + 3 * i, 3 + 3 * i
@@ -199,7 +199,7 @@ L.append(r"\end{tabular}%")
 L.append("}")
 L.append(r"\caption{\small Proportion (\%) of observed (Obs.), inferred (Inf.) and unknown (Unk.) "
          r"domains w.r.t.\ $\tau$. The observed proportion (Obs.), independent of $\tau$, "
-         r"is given under each dataset name. $<$0.1: non-zero but below 0.1\%.}")
+         r"is given under each dataset name. $<$0.01: non-zero but below 0.01\%.}")
 L.append(r"\label{tab:rq1}")
 L.append(r"\end{table}")
 

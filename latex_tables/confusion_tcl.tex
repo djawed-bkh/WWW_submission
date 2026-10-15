@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrrrrrrrr}
+\hline
+BDD & Couverture & $P_+$ & $R_+$ & $F1_+$ & $P_-$ & $R_-$ & $F1_-$ & F1 moyen \\
+\hline
+Musical group (min\_total\_150, conservative, after\_propagation) & 75.38 & 65.05 & 87.99 & 74.80 & 81.45 & 52.72 & 64.01 & 69.41 \\
+Musical group (min\_total\_30, conservative, after\_propagation) & 75.38 & 65.05 & 87.99 & 74.80 & 81.45 & 52.73 & 64.02 & 69.41 \\
+Country (min\_total\_10, conservative, after\_propagation) & 99.97 & 72.78 & 47.41 & 57.41 & 61.00 & 82.27 & 70.06 & 63.73 \\
+Country (min\_total\_190, conservative, after\_propagation) & 99.96 & 72.77 & 47.40 & 57.41 & 61.00 & 82.26 & 70.05 & 63.73 \\
+Politician (min\_total\_1185, conservative, after\_propagation) & 84.83 & 63.49 & 86.39 & 73.19 & 78.71 & 50.32 & 61.39 & 67.29 \\
+Politician (min\_total\_128, conservative, after\_propagation) & 84.83 & 63.49 & 86.39 & 73.19 & 78.71 & 50.32 & 61.40 & 67.29 \\
+\hline
+\end{tabular}
+\caption{Résultats TCL en pourcentage. $P$ : précision ; $R$ : rappel. F1 moyen : moyenne des F1 positif et négatif.}
+\label{tab:fact-checking-tcl}
+\end{table}

@@ -1,0 +1,12 @@
+http://www.wikidata.org/prop/P569	sequence_before	http://www.wikidata.org/prop/P39	0.9914924774672687	114722
+http://www.wikidata.org/prop/P569	in_between	http://www.wikidata.org/prop/P570	0.9711313498478747	199178
+http://www.wikidata.org/prop/P106	one_or_the_other_not_closed	http://www.wikidata.org/prop/P569	0.9755201311232717	37827
+http://www.wikidata.org/prop/P569	sequence_before	http://www.wikidata.org/prop/P570	0.9976302603701211	199178
+http://www.wikidata.org/prop/P569	before	http://www.wikidata.org/prop/P570	0.9840494432115997	199178
+http://www.wikidata.org/prop/P570	in_between	http://www.wikidata.org/prop/P569	0.9711313498478747	199178
+http://www.wikidata.org/prop/P569	sequence_before	http://www.wikidata.org/prop/P106	0.9974356940809475	37827
+http://www.wikidata.org/prop/P39	one_or_the_other_not_closed	http://www.wikidata.org/prop/P569	0.9110632659821133	114722
+http://www.wikidata.org/prop/P569	before	http://www.wikidata.org/prop/P39	0.9828193371803141	114722
+http://www.wikidata.org/prop/P569	before	http://www.wikidata.org/prop/P106	0.9925185713908055	37827
+http://www.wikidata.org/prop/P570	either_one_or_the_other	http://www.wikidata.org/prop/P39	0.9418782176460145	56330
+http://www.wikidata.org/prop/P39	either_one_or_the_other	http://www.wikidata.org/prop/P570	0.9418782176460145	56330

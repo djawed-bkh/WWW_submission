@@ -13,7 +13,8 @@ def test_relation_counts_distinguish_missing_relations_from_wrong_predictions():
         "after": {"support": [0, 10]},
         "during": {"support": [1, 10]},
     }}}
-    for score, missing in [(0.0, 1), (False, 2), (float("nan"), 2), (float("inf"), 2)]:
+    for score, missing in [(0.1, 1), (0.0, 2), (-0.1, 2), (False, 2),
+                           (float("nan"), 2), (float("inf"), 2)]:
         predicted = {"a": {"relations": {
             "before": {"inferred_score": score},
             "after": {"inferred_score": 1.0},
@@ -27,7 +28,7 @@ def test_relation_counts_distinguish_missing_relations_from_wrong_predictions():
         assert rexp._ablation_relation_counts(
             observed, {"a": {"relations": predictions}}, 0.5, 10,
             missing_records=records,
-        ) == (2, 0)
+        ) == (0, 0)
         assert records == []
 
 
@@ -61,7 +62,7 @@ def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
     assert {k: int(row[k]) for k in row if k.startswith("n_")} == {
         "n_observed": 100, "n_observed_relations": 200,
         "n_masked": 10, "n_unreached": 5,
-        "n_masked_relations": 20, "n_missing_relations": 5,
+        "n_masked_relations": 10, "n_missing_relations": 5,
     }
     archive = tmp_path / "MRR/Q42/occ_0p5_min_10_timeout_600"
     summary = json.loads((archive / "summary.json").read_text())
@@ -70,7 +71,7 @@ def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
     masked_rounds = json.loads((archive / "masked_rounds.json").read_text())
     inferred_rounds = json.loads((archive / "inferred_rounds.json").read_text())
     missing = json.loads((archive / "missing_relations.json").read_text())
-    assert missing["n_masked_relations"] == 20
+    assert missing["n_masked_relations"] == 10
     assert missing["n_missing_relations"] == len(missing["missing_relations"]) == 5
     for record in missing["missing_relations"]:
         assert record["property_pair_occurrence"] == 10
@@ -111,7 +112,7 @@ def test_ablation_exports_counts_and_latex(tmp_path, monkeypatch, capsys):
     log.write_text(capsys.readouterr().out)
     parsed = ablation_tables.parse_results(log)
     table = ablation_tables.build_latex_table("Q42", parsed["Q42"])
-    assert "0.500 & 200 & 5/20" in table
+    assert "0.500 & 200 & 5/10" in table
     assert "Miss./Mask." in table
     other_configuration = archive.parent / "occ_0p9_min_10_timeout_600"
     other_configuration.mkdir()

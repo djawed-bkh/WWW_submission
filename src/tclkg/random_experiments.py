@@ -2469,12 +2469,15 @@ def Number_of_relevant_observed_domains(jsonfile: str | None = None) -> dict[str
 
 def _ablation_relation_counts(
     observed_domains, inferred_domains, occurrence, total, *, missing_records=None,
+    include_unreached=False,
 ):
     """Count qualifying directed-pair/Allen-relation targets and missing scores.
 
     Count missing relations only in domains with at least one valid prediction.
-    The observed total still includes qualifying relations in unreached domains.
-    Finite numeric scores (including zero) count as predictions at any rank.
+    Both counts exclude domains without a strictly positive finite prediction.
+    Set include_unreached=True only to count the full observed population.
+    Only strictly positive finite numeric scores count as recovered relations,
+    at any rank. Zero and negative scores count as missing.
     Apply the same positive-evidence thresholds as the weighted MRR.
     If supplied, append missing targets and their original support counts to
     missing_records: support = (relation occurrences, property-pair occurrences).
@@ -2488,8 +2491,11 @@ def _ablation_relation_counts(
             isinstance(payload.get("inferred_score"), (int, float))
             and not isinstance(payload["inferred_score"], bool)
             and math.isfinite(payload["inferred_score"])
+            and payload["inferred_score"] > 0
             for payload in predictions.values()
         )
+        if not reached and not include_unreached:
+            continue
         for relation, evidence in domain["relations"].items():
             counts = support_counts(evidence.get("support"))
             if (counts is None or counts[1] <= 0 or counts[1] < total
@@ -2500,7 +2506,8 @@ def _ablation_relation_counts(
                 continue
             score = predictions.get(relation, {}).get("inferred_score")
             if not (isinstance(score, (int, float))
-                    and not isinstance(score, bool) and math.isfinite(score)):
+                    and not isinstance(score, bool) and math.isfinite(score)
+                    and score > 0):
                 missing += 1
                 if missing_records is not None:
                     missing_records.append({
@@ -2593,7 +2600,7 @@ def ablation_study_of_inference(
     }
     valid_domain_count = len(retained_domains)
     observed_relation_count, _ = _ablation_relation_counts(
-        retained_domains, {}, occurence, total,
+        retained_domains, {}, occurence, total, include_unreached=True,
     )
     if valid_domain_count < 100:
         print(
@@ -2830,7 +2837,7 @@ def ablation_study_of_inference_all_domains(
     }
     valid_domain_count = len(retained_domains)
     observed_relation_count, _ = _ablation_relation_counts(
-        retained_domains, {}, occurence, total,
+        retained_domains, {}, occurence, total, include_unreached=True,
     )
     if valid_domain_count == 0:
         print(f"Skipping ablation for {jsonfile}: no valid observed domains")
@@ -3001,6 +3008,174 @@ def ablation_study_of_inference_all_domains(
         "n_masked_relations": masked_relations,
         "n_missing_relations": missing_relations,
     })
+
+
+def benchmark_propagation_cpu(conservative_dir=None):
+    """Retourner le temps CPU moyen (secondes) de cinq propagations par JSON.
+
+    Charger uniquement after_oracle dans conservative. Reprendre les seuils
+    du dossier occ_*_min_*_timeout_* et la composition indiquée par le chemin.
+    Exclure lecture, préparation des copies et affichage du chronométrage.
+    Aucun fichier ni résultat d'inférence n'est enregistré.
+    """
+    import time
+    from .qcn_generator2 import propagateAndFilterConservative
+
+    directory = Path(conservative_dir) if conservative_dir is not None else results_root / "conservative"
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Missing conservative directory: {directory}")
+    paths = sorted(directory.rglob("*.json"))
+    if not paths:
+        raise FileNotFoundError(f"No JSON files in {directory}")
+    mean_times = {}
+    for path in paths:
+        print(f"Exploration du fichier : {path}", flush=True)
+        with path.open(encoding="utf-8") as handle:
+            content = json.load(handle)
+        if not isinstance(content, Mapping) or "after_oracle" not in content:
+            print(f"Fichier ignoré (sans after_oracle) : {path}", flush=True)
+            continue
+        after_oracle = content["after_oracle"]
+        if not isinstance(after_oracle, Mapping):
+            raise ValueError(f"Invalid 'after_oracle' section in {path}")
+        thresholds = next((
+            match for part in reversed(path.parent.parts)
+            if (match := re.fullmatch(
+                r"occ_([0-9]+(?:[p.][0-9]+)?)_min_([0-9]+)_timeout_([0-9]+)", part
+            )) is not None
+        ), None)
+        if thresholds is None:
+            raise ValueError(f"Missing threshold configuration folder for {path}")
+        occurrence = float(thresholds[1].replace("p", "."))
+        total = int(thresholds[2])
+        reduced_composition = (
+            "reduced_composition" in path.parts
+            or path.stem.endswith("_reduced_composition")
+            and not path.stem.endswith("_non_reduced_composition")
+        )
+        qcn = {}
+        for pair, domain in after_oracle.items():
+            if not isinstance(pair, str) or pair.count("___") != 1:
+                raise ValueError(f"Invalid QCN pair key in {path}: {pair}")
+            qcn[tuple(pair.split("___", 1))] = domain
+        cpu_times = []
+        for run in range(1, 6):
+            run_qcn = copy.deepcopy(qcn)
+            started = time.process_time()
+            propagated = propagateAndFilterConservative(
+                run_qcn,
+                domain_reliability_threshold=total,
+                relation_occurrence_threshold=occurrence,
+                reduced_composition=reduced_composition,
+            )
+            elapsed = time.process_time() - started
+            del propagated
+            cpu_times.append(elapsed)
+            print(f"{path} | propagation {run}/5 : {elapsed:.6f} s CPU", flush=True)
+        mean_times[str(path)] = statistics.mean(cpu_times)
+        print(f"Fin du fichier {path} : moyenne CPU = {mean_times[str(path)]:.6f} s", flush=True)
+    return mean_times
+
+
+def report_zero_inferred_scores(conservative_dir=None):
+    """Signaler les scores inférés nuls dans les domaines de statut Inferred.
+
+    Parcourir récursivement les JSON et leurs sections QCN (initial,
+    after_oracle, after_propagation). Retourner les anomalies sans modifier
+    les fichiers. Les booléens et les valeurs manquantes ne sont pas des zéros.
+    """
+    from .qcn_generator2 import normalize_relation_status, STATUS_INFERRED
+
+    directory = Path(conservative_dir) if conservative_dir is not None else results_root / "conservative"
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Missing conservative directory: {directory}")
+    paths = sorted(directory.rglob("*.json"))
+    if not paths:
+        raise FileNotFoundError(f"No JSON files in {directory}")
+    findings = []
+    for path in paths:
+        print(f"Exploration du fichier : {path}", flush=True)
+        findings_before = len(findings)
+        with path.open(encoding="utf-8") as handle:
+            content = json.load(handle)
+        if not isinstance(content, Mapping):
+            content = {}
+        for section, domains in content.items():
+            if not isinstance(domains, Mapping):
+                continue
+            for pair, domain in domains.items():
+                if not isinstance(domain, Mapping):
+                    continue
+                if normalize_relation_status(domain.get("status")) != STATUS_INFERRED:
+                    continue
+                relations = domain.get("relations", {})
+                if not isinstance(relations, Mapping):
+                    continue
+                zeros = []
+                for relation, evidence in relations.items():
+                    if not isinstance(evidence, Mapping):
+                        continue
+                    score = evidence.get("inferred_score")
+                    if isinstance(score, (int, float)) and not isinstance(score, bool) and score == 0:
+                        zeros.append(relation)
+                if zeros:
+                    finding = {"file": str(path), "section": section,
+                               "domain": pair, "relations": zeros}
+                    findings.append(finding)
+                    print(f"{path} | {section} | {pair}: inferred_score=0 pour {', '.join(zeros)}", flush=True)
+        file_findings = len(findings) - findings_before
+        if file_findings:
+            print(f"Fin du fichier {path} : {file_findings} domaines/sections avec un score inféré nul.", flush=True)
+        else:
+            print(f"Fin du fichier {path} : aucun score inféré nul.", flush=True)
+    print(f"{len(paths)} JSON examinés ; {len(findings)} domaines/sections avec un score inféré nul.")
+    return findings
+
+
+def recompute_reached_relations_percentages(archive_dir, output_csv=None):
+    """Recompter les relations depuis les archives, sans propagation ni ablation.
+
+    Le pourcentage porte uniquement sur les domaines ayant au moins un score
+    fini strictement positif. Les archives et les MRR restent inchangés.
+    """
+    archive_dir = Path(archive_dir)
+    summaries = sorted(archive_dir.rglob("summary.json"))
+    if not summaries:
+        raise FileNotFoundError(f"No archived summaries in {archive_dir}")
+    rows = []
+    for summary_path in summaries:
+        folder = summary_path.parent
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        masked = json.loads((folder / "masked_rounds.json").read_text(encoding="utf-8"))
+        inferred = json.loads((folder / "inferred_rounds.json").read_text(encoding="utf-8"))
+        predictions_by_round = {item["round"]: item for item in inferred}
+        if len(predictions_by_round) != len(inferred) or {item["round"] for item in masked} != set(predictions_by_round):
+            raise ValueError(f"Mismatched archived rounds in {folder}")
+        targets = missing = 0
+        for item in masked:
+            prediction = predictions_by_round[item["round"]]["inferred_qcn"]
+            ground_truth = item["ground_truth"]
+            count, absent = _ablation_relation_counts(
+                ground_truth, {pair: prediction.get(pair, {}) for pair in ground_truth},
+                summary["occurrence_threshold"], summary["total_threshold"],
+            )
+            targets += count
+            missing += absent
+        percentage = 100 * (targets - missing) / targets if targets else None
+        row = {"file": str(folder.relative_to(archive_dir)),
+               "relations_in_reached_domains": targets,
+               "recovered_relations": targets - missing,
+               "missing_relations": missing,
+               "reached_relations_percent": percentage}
+        rows.append(row)
+        formatted = f"{percentage:.2f}%" if percentage is not None else "--"
+        print(f"{row['file']}: {targets - missing}/{targets} = {formatted}", flush=True)
+    if output_csv is not None:
+        with Path(output_csv).open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+    return rows
 
 
 def run_ablation_studies_of_inference_all_domains(
@@ -3693,7 +3868,7 @@ def exploitableInferredDomains(kg_names: list[str] | None = None) -> None:
 
                     
 #if __name__ == "__main__":
-    after_propagation_domain_sizes_statistics()
+    # after_propagation_domain_sizes_statistics()
     #exploitableInferredDomains()
     # parser = argparse.ArgumentParser(description="Check consistency of a QCN from a JSON file.")
     # parser.add_argument("jsonfile", type=str, help="Path to the QCN JSON file.")
@@ -3731,3 +3906,523 @@ def exploitableInferredDomains(kg_names: list[str] | None = None) -> None:
     #     print("The QCN is consistent.")
     # else:
     #     print("The QCN is inconsistent.")
+
+
+# Ordered threshold grids used in the paper (positions are equally spaced).
+DOMAIN_SIZE_TAUS = {
+    "Country": [0, 10, 59, 110, 160, 190],
+    "Politician": [0, 14, 42, 128, 389, 1185],
+    "Musical group": [0, 10, 30, 60, 100, 150],
+}
+DOMAIN_SIZE_QIDS = {"Q6256": "Country", "Q82955": "Politician", "Q215380": "Musical group"}
+
+
+def load_domain_size_rows(input_path: str | Path, composition: str = "reduced_composition") -> list[dict[str, Any]]:
+    """Load tables or domains classified by their after_propagation status.
+
+    Directed arcs are counted separately. Observed sizes count strictly positive
+    support numerators; inferred sizes count strictly positive inferred_score
+    values. Status None is
+    excluded. A None size marks absence from that status-specific population.
+    Tables without status columns explicitly supply both size populations.
+    Only occurrence=0 runs of the selected composition are loaded; duplicates
+    are rejected rather than pooling configurations.
+    """
+    root = Path(input_path)
+    if not root.exists():
+        raise FileNotFoundError(root)
+    paths = sorted(root.rglob("*")) if root.is_dir() else [root]
+    tables = [p for p in paths if p.suffix.lower() in {".csv", ".tsv"}]
+    rows = []
+    required = {"dataset", "tau", "domain_id", "size_observed", "size_inferred"}
+    for path in tables:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t" if path.suffix.lower() == ".tsv" else ",")
+            if not required.issubset(reader.fieldnames or []):
+                continue
+            rows.extend(dict(row) for row in reader)
+    # Prefer explicit tabular data when supplied, rather than counting it twice.
+    if not rows:
+        for path in paths:
+            if path.suffix.lower() != ".json" or not path.stem.startswith("qcn2_"):
+                continue
+            match = re.fullmatch(r"qcn2_(Q\d+)(?:_(non_reduced_composition|reduced_composition))?", path.stem)
+            if match is None or match[1] not in DOMAIN_SIZE_QIDS:
+                continue
+            variant = match[2] or next((p for p in path.parts if p in {"reduced_composition", "non_reduced_composition"}), None)
+            if variant != composition:
+                continue
+            config = next((m for part in path.parts if (m := re.fullmatch(r"occ_([\d.p]+)_min_(\d+)_timeout_\d+", part))), None)
+            dataset = DOMAIN_SIZE_QIDS[match[1]]
+            if config is None or float(config[1].replace("p", ".")) != 0:
+                continue
+            tau = int(config[2])
+            if tau not in DOMAIN_SIZE_TAUS[dataset]:
+                continue
+            with path.open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+            propagated = payload["after_propagation"]
+            for pair, domain in propagated.items():
+                status = domain.get("status")
+                if status not in {"Observed", "Inferred", "Infered"}:
+                    continue
+                observed = None
+                inferred = None
+                if status == "Observed":
+                    observed = sum(
+                        1 for relation in domain["relations"].values()
+                        if isinstance(relation.get("support"), (list, tuple))
+                        and len(relation["support"]) == 2
+                        and relation["support"][0] > 0
+                    )
+                else:
+                    inferred = sum(
+                        1 for relation in domain["relations"].values()
+                        if isinstance(relation.get("inferred_score"), (int, float))
+                        and not isinstance(relation["inferred_score"], bool)
+                        and relation["inferred_score"] > 0
+                    )
+                rows.append(dict(dataset=dataset, tau=tau, domain_id=pair,
+                                 size_observed=observed, size_inferred=inferred))
+            # Release the large QCN before loading the next threshold.
+            del payload, propagated
+    if not rows:
+        raise ValueError(f"No domain-size data found in {root}")
+    seen = set()
+    for row in rows:
+        dataset = row["dataset"]
+        if dataset not in DOMAIN_SIZE_TAUS:
+            raise ValueError(f"Unknown dataset: {dataset!r}")
+        for field in ("tau", "size_observed", "size_inferred"):
+            value = row[field]
+            if field != "tau" and value is None:
+                continue
+            if isinstance(value, bool) or not re.fullmatch(r"\d+", str(value)):
+                raise ValueError(f"Invalid integer {field}: {value!r}")
+            row[field] = int(value)
+        if row["tau"] not in DOMAIN_SIZE_TAUS[dataset]:
+            raise ValueError(f"Unexpected tau for {dataset}: {row['tau']}")
+        if not all(row[field] is None or 1 <= row[field] <= 13 for field in ("size_observed", "size_inferred")):
+            raise ValueError(f"Domain sizes must be in [1, 13]: {row}")
+        if not row["domain_id"]:
+            raise ValueError("Empty domain_id")
+        key = dataset, row["tau"], row["domain_id"]
+        if key in seen:
+            raise ValueError(f"Duplicate domain/run: {key}; select one input configuration")
+        seen.add(key)
+    return rows
+
+
+def calculate_domain_size_proportions(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Normalize each status population separately at every threshold.
+
+    Empty populations
+    are masked (undefined proportions), with n=0 and undefined diagnostics.
+    """
+    import numpy as np
+
+    result = {}
+    for dataset, taus in DOMAIN_SIZE_TAUS.items():
+        columns = [[row for row in rows if row["dataset"] == dataset and row["tau"] == tau] for tau in taus]
+        if not all(columns):
+            raise ValueError(f"Missing domain data for {dataset}, tau(s) {[tau for tau, column in zip(taus, columns) if not column]}")
+        matrices, counts, diagnostics = {}, {}, [[] for _ in taus]
+        for label, field in (("observed", "size_observed"), ("inferred", "size_inferred")):
+            population = [[row for row in column if row[field] is not None] for column in columns]
+            counts[field] = [len(column) for column in population]
+            matrices[field] = np.column_stack([
+                np.bincount([row[field] for row in column], minlength=14)[1:14] / len(column)
+                if column else np.full(13, np.nan)
+                for column in population
+            ])
+            for index, column in enumerate(population):
+                sizes = [row[field] for row in column]
+                stats = (f"median={statistics.median(sizes):g}, universal={sizes.count(13)/len(sizes):.6f}"
+                         if sizes else "median=N/A, universal=N/A")
+                diagnostics[index].append(f"{label}: n={len(sizes)}, {stats}")
+        result[dataset] = {**matrices, "counts": counts}
+        for tau, stats in zip(taus, diagnostics):
+            print(f"{dataset} | τ={tau} | " + " | ".join(stats))
+    return result
+
+
+def plot_domain_size_heatmap(
+    proportions: dict[str, Any], output_path: str | Path, min_n: int = 100,
+) -> Path:
+    """Save the compact 1 x 3 layout, keeping status populations unchanged.
+
+    The observed distribution at tau_0 supplies the single Obs. column.
+    Empty populations remain masked; hatching marks counts below min_n.
+    """
+    import matplotlib as mpl
+    import numpy as np
+    from matplotlib.colors import PowerNorm
+    from matplotlib.patches import Rectangle
+
+    if min_n < 0:
+        raise ValueError("min_n must be nonnegative")
+    matrices = {
+        dataset: np.column_stack((proportions[dataset]["size_observed"][:, 0],
+                                  proportions[dataset]["size_inferred"]))
+        for dataset in DOMAIN_SIZE_TAUS
+    }
+    finite_values = [matrix[np.isfinite(matrix)] for matrix in matrices.values()]
+    vmax = max((values.max() for values in finite_values if values.size), default=1.0)
+    norm = PowerNorm(gamma=0.5, vmin=0, vmax=vmax)
+    style = {"font.family": "serif", "font.size": 8, "mathtext.fontset": "dejavuserif",
+             "text.usetex": False, "pdf.fonttype": 42, "axes.titlesize": 8,
+             "axes.labelsize": 8, "xtick.labelsize": 7, "ytick.labelsize": 8,
+             "hatch.linewidth": 0.4}
+    with mpl.rc_context(style):
+        fig, axes = plt.subplots(1, 3, sharey=True, figsize=(7, 2.4))
+        # Reserve space for vertical counts and the shared x label.
+        fig.subplots_adjust(left=.075, right=.865, bottom=.34, top=.88, wspace=.09)
+        try:
+            for panel, (dataset, taus) in enumerate(DOMAIN_SIZE_TAUS.items()):
+                ax = axes[panel]
+                matrix = matrices[dataset]
+                counts = [proportions[dataset]["counts"]["size_observed"][0],
+                          *proportions[dataset]["counts"]["size_inferred"]]
+                mesh = ax.imshow(np.ma.masked_invalid(matrix), origin="lower", aspect="auto",
+                                 interpolation="nearest", extent=(-.5, 6.5, .5, 13.5),
+                                 cmap="cividis", norm=norm, rasterized=False)
+                ax.set_title(dataset)
+                ax.set_xticks(range(7), labels=["Obs.", *taus])
+                ax.set_yticks(range(1, 14))
+                ax.tick_params(axis="x", length=2, pad=2)
+                ax.tick_params(axis="y", length=2 if panel == 0 else 0,
+                               labelleft=panel == 0)
+                if panel == 0:
+                    ax.set_ylabel(r"Domain Size")
+                for column, n in enumerate(counts):
+                    # Vertical text keeps large n legible without overlapping.
+                    ax.text(column, -.17, f"n={n}", transform=ax.get_xaxis_transform(),
+                            ha="center", va="top", rotation=90, fontsize=6, clip_on=False)
+                    if n < min_n:
+                        ax.add_patch(Rectangle((column-.5, .5), 1, 13,
+                                               facecolor="none", edgecolor="gray",
+                                               linewidth=0, hatch="///", zorder=2))
+                    for size_index, value in enumerate(matrix[:, column]):
+                        if np.isfinite(value) and value >= .10:
+                            rgb = mesh.cmap(norm(value))[:3]
+                            # WCAG relative luminance of the rendered cell.
+                            linear = [c / 12.92 if c <= .04045 else ((c+.055)/1.055)**2.4 for c in rgb]
+                            luminance = sum(c*w for c, w in zip(linear, (.2126, .7152, .0722)))
+                            ax.text(column, size_index+1, f"{value:.2f}", fontsize=5,
+                                    ha="center", va="center",
+                                    color="black" if luminance > .179 else "white", zorder=3)
+                ax.axvline(.5, color="white", linewidth=2, zorder=4)
+                ax.axhline(12.5, color="white", linewidth=.6, alpha=.8, zorder=4)
+            fig.supxlabel(r"Threshold $\tau$ (inferred domains)", x=.47, y=.015, fontsize=8)
+            colorbar_ax = fig.add_axes([.885, .34, .018, .54])
+            colorbar = fig.colorbar(mesh, cax=colorbar_ax)
+            colorbar.set_label("Proportion of domains")
+            # Ticks are proportions, not gamma-transformed coordinates.
+            ticks = [value for value in (0, .05, .1, .25, .5, .75) if value <= vmax]
+            colorbar.set_ticks(ticks)
+            colorbar.set_ticklabels([f"{value:g}" for value in ticks])
+            fig.text(.885, .26, f"hatched: n < {min_n}", ha="left", va="top", fontsize=6)
+            output = Path(output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(output, format="pdf", bbox_inches="tight")
+        finally:
+            plt.close(fig)
+    return output
+
+def export_eligible_observed_domain_sizes(
+    conservative_dir: str | Path | None = None,
+    output_path: str | Path | None = None,
+    composition: str = "reduced_composition",
+) -> Path:
+    """Export size counts/proportions for observed premises at each tau.
+
+    Uses after_oracle and the conservative propagator's source filter:
+    Observed status, positive support ratio, and support denominator >= tau.
+    Only occurrence=0 runs are selected. Size counts positive-support relations
+    in the eligible domain, not zero-support placeholders. Directed pairs are
+    counted separately. Eligibility means usable as a premise, not proof that
+    the pair participated in a successful inference. Empty populations have
+    undefined proportions (N/A). Missing or duplicate configurations are errors.
+    """
+    from .qcn_generator2 import support_counts, support_ratio
+
+    root = Path(conservative_dir) if conservative_dir is not None else results_root / "conservative"
+    output = Path(output_path) if output_path is not None else root / "eligible_observed_domain_sizes.txt"
+    if not root.is_dir():
+        raise FileNotFoundError(root)
+    if composition not in {"reduced_composition", "non_reduced_composition"}:
+        raise ValueError(f"Unknown composition: {composition}")
+    configurations = {}
+    for path in sorted(root.rglob("qcn2_*.json")):
+        match = re.fullmatch(r"qcn2_(Q\d+)(?:_(non_reduced_composition|reduced_composition))?", path.stem)
+        if match is None or match[1] not in DOMAIN_SIZE_QIDS:
+            continue
+        variant = match[2] or next((part for part in path.parts if part in {"reduced_composition", "non_reduced_composition"}), None)
+        config = next((m for part in path.parts if (m := re.fullmatch(r"occ_([\d.p]+)_min_(\d+)_timeout_\d+", part))), None)
+        if variant != composition or config is None or float(config[1].replace("p", ".")) != 0:
+            continue
+        dataset, tau = DOMAIN_SIZE_QIDS[match[1]], int(config[2])
+        if tau not in DOMAIN_SIZE_TAUS[dataset]:
+            continue
+        key = dataset, tau
+        if key in configurations:
+            raise ValueError(f"Duplicate configuration for {key}")
+        configurations[key] = path
+    missing = [(dataset, tau) for dataset, taus in DOMAIN_SIZE_TAUS.items() for tau in taus
+               if (dataset, tau) not in configurations]
+    if missing:
+        raise ValueError(f"Missing configurations: {missing}")
+    lines = ["# Observed premises: support > 0 and total >= tau; occurrence threshold = 0.",
+             "# Size = number of positive-support relations; directed pairs counted separately.",
+             "dataset\ttau\tn_eligible\tsize\tcount\tproportion"]
+    for dataset, taus in DOMAIN_SIZE_TAUS.items():
+        for tau in taus:
+            with configurations[dataset, tau].open(encoding="utf-8") as handle:
+                payload = json.load(handle)
+            counts = [0] * 14
+            for domain in payload["after_oracle"].values():
+                if domain.get("status") != "Observed":
+                    continue
+                positive, eligible = 0, False
+                for relation in domain["relations"].values():
+                    support = relation.get("support")
+                    ratio = support_ratio(support)
+                    if ratio is not None and ratio > 0:
+                        positive += 1
+                        eligible |= support_counts(support)[1] >= tau
+                if eligible:
+                    if not 1 <= positive <= 13:
+                        raise ValueError(f"Invalid observed domain size: {positive}")
+                    counts[positive] += 1
+            del payload
+            n = sum(counts)
+            for size in range(1, 14):
+                proportion = f"{counts[size] / n:.10f}" if n else "N/A"
+                lines.append(f"{dataset}\t{tau}\t{n}\t{size}\t{counts[size]}\t{proportion}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output
+
+
+def count_distinct_scores_in_universal_inferred_domains(
+    domains: Mapping[str, Any],
+) -> dict[int, int]:
+    """Count inferred domains with exactly 13 positive-score relations.
+
+    Distinctness uses exact numeric equality, without rounding. Missing,
+    nonnumeric, nonfinite, boolean and nonpositive scores are excluded.
+    Directed domains are counted separately, as stored in the QCN.
+    """
+    counts = dict.fromkeys(range(1, 14), 0)
+    for domain in domains.values():
+        if not isinstance(domain, Mapping) or domain.get("status") not in {"Inferred", "Infered"}:
+            continue
+        relations = domain.get("relations")
+        if not isinstance(relations, Mapping):
+            continue
+        scores = [relation.get("inferred_score") for relation in relations.values()
+                  if isinstance(relation, Mapping)]
+        positive_scores = [score for score in scores
+                           if isinstance(score, (int, float)) and not isinstance(score, bool)
+                           and math.isfinite(score) and score > 0]
+        if len(positive_scores) == 13:
+            counts[len(set(positive_scores))] += 1
+    return counts
+
+
+def plot_conservative_distinct_score_histograms(
+    conservative_dir: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    composition: str = "reduced_composition",
+) -> dict[str, dict[int, int]]:
+    """Write one 300-dpi PNG per dataset and tau, plus a TXT of all counts.
+
+    Traverse all QCN datasets and thresholds under conservative, selecting
+    occurrence=0 and one composition variant to avoid mixing configurations.
+    Domain size uses the same positive inferred_score rule as the heatmap.
+    Return histograms keyed by source path relative to conservative.
+    """
+    root = Path(conservative_dir) if conservative_dir is not None else results_root / "conservative"
+    destination = Path(output_dir) if output_dir is not None else root / "distinct_score_histograms"
+    if not root.is_dir():
+        raise FileNotFoundError(root)
+    if composition not in {"reduced_composition", "non_reduced_composition"}:
+        raise ValueError(f"Unknown composition: {composition}")
+    configurations = {}
+    for path in sorted(root.rglob("qcn2_*.json")):
+        match = re.fullmatch(r"qcn2_(Q\d+)(?:_(non_reduced_composition|reduced_composition))?", path.stem)
+        if match is None:
+            continue
+        variant = match[2] or next((part for part in path.parts if part in {"reduced_composition", "non_reduced_composition"}), None)
+        config = next((m for part in path.parts if (m := re.fullmatch(r"occ_([\d.p]+)_min_(\d+)_timeout_\d+", part))), None)
+        if variant != composition or config is None or float(config[1].replace("p", ".")) != 0:
+            continue
+        key = match[1], int(config[2])
+        if key in configurations:
+            raise ValueError(f"Duplicate dataset/tau configuration: {key}")
+        configurations[key] = path
+    if not configurations:
+        raise ValueError(f"No matching conservative QCNs in {root}")
+    destination.mkdir(parents=True, exist_ok=True)
+    histograms = {}
+    lines = ["dataset\ttau\tn_domains\tn_distinct_scores\tcount"]
+    style = {"font.family": "serif", "font.size": 8, "text.usetex": False,
+             "pdf.fonttype": 42, "mathtext.fontset": "dejavuserif"}
+    for (qid, tau), path in sorted(configurations.items()):
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        counts = count_distinct_scores_in_universal_inferred_domains(payload["after_propagation"])
+        del payload
+        histograms[str(path.relative_to(root))] = counts
+        dataset = DOMAIN_SIZE_QIDS.get(qid, qid)
+        n = sum(counts.values())
+        with plt.rc_context(style):
+            fig, ax = plt.subplots(figsize=(3.4, 2.4), layout="constrained")
+            try:
+                ax.bar(list(counts), list(counts.values()), color="0.4", width=.8)
+                ax.set_xticks(range(1, 14))
+                ax.set_xlim(.5, 13.5)
+                ax.set_ylim(bottom=0)
+                ax.yaxis.set_major_locator(plt.matplotlib.ticker.MaxNLocator(integer=True))
+                ax.set_xlabel("Number of distinct scores")
+                ax.set_ylabel("Number of domains")
+                ax.set_title(dataset + rf" — $\tau={tau}$ (n={n})")
+                output = destination / f"distinct_scores_{qid}_tau_{tau}.png"
+                fig.savefig(output, format="png", dpi=300, bbox_inches="tight")
+            finally:
+                plt.close(fig)
+        for distinct, count in counts.items():
+            lines.append(f"{dataset}\t{tau}\t{n}\t{distinct}\t{count}")
+        print(f"{dataset} | τ={tau} | inferred domains of size 13: {n} | {output}")
+    (destination / "distinct_score_histograms.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return histograms
+
+
+DISTINCT_SCORE_HIGH_TAUS = {"Country": 190, "Politician": 389, "Musical group": 60}
+
+
+def load_distinct_score_comparison(input_path: str | Path) -> dict[str, dict[int, dict[str, Any]]]:
+    """Read tab/comma-separated counts and normalize the six selected series.
+
+    Missing size bins are zero-filled. Each selected series must have a positive
+    consistent n_domains, unique bins in 1..13, and counts summing to n_domains.
+    """
+    with Path(input_path).open(encoding="utf-8-sig", newline="") as handle:
+        header = handle.readline()
+        handle.seek(0)
+        reader = csv.DictReader(handle, delimiter="\t" if "\t" in header else ",")
+        required = {"dataset", "tau", "n_domains", "n_distinct_scores", "count"}
+        if not required.issubset(reader.fieldnames or []):
+            raise ValueError(f"Expected columns: {sorted(required)}")
+        series = {dataset: {} for dataset in DISTINCT_SCORE_HIGH_TAUS}
+        for row in reader:
+            dataset = row["dataset"]
+            if dataset not in series:
+                continue
+            tau = int(row["tau"])
+            if tau not in (0, DISTINCT_SCORE_HIGH_TAUS[dataset]):
+                continue
+            n, size, count = (int(row[field]) for field in ("n_domains", "n_distinct_scores", "count"))
+            if n <= 0 or not 1 <= size <= 13 or count < 0:
+                raise ValueError(f"Invalid histogram row: {row}")
+            entry = series[dataset].setdefault(tau, {"n_domains": n, "counts": {}})
+            if entry["n_domains"] != n or size in entry["counts"]:
+                raise ValueError(f"Inconsistent population or duplicate bin: {row}")
+            entry["counts"][size] = count
+    for dataset, high_tau in DISTINCT_SCORE_HIGH_TAUS.items():
+        for tau in (0, high_tau):
+            if tau not in series[dataset]:
+                raise ValueError(f"Missing histogram: {dataset}, tau={tau}")
+            entry = series[dataset][tau]
+            if sum(entry["counts"].values()) != entry["n_domains"]:
+                raise ValueError(f"Counts do not sum to n_domains: {dataset}, tau={tau}")
+            entry["proportions"] = [entry["counts"].get(size, 0) / entry["n_domains"] for size in range(1, 14)]
+    return series
+
+
+def plot_distinct_score_comparison(
+    input_path: str | Path,
+    output_path: str | Path = "distinct_scores.pdf",
+) -> Path:
+    """Compare tau=0 (filled bars) and high tau (outline bars) in three panels."""
+    series = load_distinct_score_comparison(input_path)
+    # Set one limit from all six series; per-panel limits freeze shared autoscaling.
+    max_proportion = max(
+        max(entry["proportions"])
+        for dataset_series in series.values() for entry in dataset_series.values()
+    )
+    y_max = min(1.05, max_proportion * 1.25)
+    style = {"font.family": "serif", "font.size": 8, "mathtext.fontset": "dejavuserif",
+             "text.usetex": False, "pdf.fonttype": 42, "axes.titlesize": 8,
+             "axes.labelsize": 8, "xtick.labelsize": 8, "ytick.labelsize": 8}
+    with plt.rc_context(style):
+        fig, axes = plt.subplots(1, 3, sharey=True, figsize=(7, 2), layout="constrained")
+        try:
+            for ax, (dataset, high_tau) in zip(axes, DISTINCT_SCORE_HIGH_TAUS.items()):
+                for tau in (0, high_tau):
+                    entry = series[dataset][tau]
+                    ax.bar(range(1, 14), entry["proportions"], width=.8,
+                           facecolor="0.65" if tau == 0 else "none",
+                           edgecolor="0.65" if tau == 0 else "0.1",
+                           linewidth=.5 if tau == 0 else 1,
+                           label=rf"$\tau={tau}$ (n={entry['n_domains']})")
+                ax.set_title(dataset)
+                ax.set_xticks(range(1, 14))
+                ax.set_xlim(.4, 13.6)
+                ax.tick_params(axis="x", length=2, pad=2, labelsize=7)
+                ax.legend(fontsize=6, frameon=False, loc="upper right")
+                ax.spines[["top", "right"]].set_visible(False)
+            axes[0].set_ylim(0, y_max)
+            axes[0].set_ylabel("Proportion of universal domains")
+            fig.supxlabel("Number of distinct scores", fontsize=8)
+            output = Path(output_path)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(output, format="pdf", bbox_inches="tight")
+        finally:
+            plt.close(fig)
+    return output
+
+
+def domain_size_heatmap_main(argv: list[str] | None = None) -> None:
+    """Generate the compact v2 domain-size figure."""
+    parser = argparse.ArgumentParser(description="Domain-size heatmaps in ACM/TheWebConf format.")
+    parser.add_argument("--input", type=Path, default=results_root / "conservative", help="Conservative directory or CSV/TSV file.")
+    parser.add_argument("--output-dir", type=Path, default=Path.cwd(), help="Output directory for figures and reports.")
+    parser.add_argument("--composition", choices=("reduced_composition", "non_reduced_composition"), default="reduced_composition", help="QCN JSON composition variant to load.")
+    parser.add_argument("--min-n", type=int, default=100, help="Hatch columns with counts below this threshold (default: 100).")
+    parser.add_argument("--distinct-score-comparison", type=Path, metavar="TXT", help="Compare tau=0 and high tau from distinct_score_histograms.txt.")
+    parser.add_argument("--distinct-score-histograms", action="store_true", help="Distinct-score histograms for inferred domains of size 13, by dataset and tau.")
+    parser.add_argument("--eligible-observed-report", action="store_true", help="Export eligible observed-premise sizes to TXT without plotting.")
+    args = parser.parse_args(argv)
+    if args.min_n < 0:
+        parser.error("--min-n must be nonnegative")
+    try:
+        if args.distinct_score_comparison is not None:
+            output = plot_distinct_score_comparison(
+                args.distinct_score_comparison, args.output_dir / "distinct_scores.pdf",
+            )
+            print(f"Figure saved: {output}")
+            return
+        if args.distinct_score_histograms:
+            plot_conservative_distinct_score_histograms(
+                args.input, args.output_dir / "distinct_score_histograms", args.composition,
+            )
+            return
+        if args.eligible_observed_report:
+            output = export_eligible_observed_domain_sizes(
+                args.input, args.output_dir / "eligible_observed_domain_sizes.txt", args.composition,
+            )
+            print(f"Report saved: {output}")
+            return
+        rows = load_domain_size_rows(args.input, args.composition)
+        summary = calculate_domain_size_proportions(rows)
+        output = plot_domain_size_heatmap(
+            summary, args.output_dir / "heatmap_domain_sizes_v2.pdf", min_n=args.min_n,
+        )
+        print(f"Figure saved: {output}")
+    except (ValueError, FileNotFoundError, KeyError) as exc:
+        parser.error(str(exc))
+
+
+if __name__ == "__main__":
+    domain_size_heatmap_main()

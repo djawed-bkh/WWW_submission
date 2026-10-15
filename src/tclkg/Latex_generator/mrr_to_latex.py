@@ -4,7 +4,7 @@
 
 # Pour chaque TKG et chaque configuration (occ, min) :
 #   - #domaines masqués        = n_masked
-#   - #relations masquées      = n_masked_relations
+#   - #relations masquées dans les domaines atteints = n_masked_relations
 #   - MRR
 #   - % domaines atteints      = 100 * (n_masked - n_unreached) / n_masked
 #   - % relations atteintes    = 100 * (n_masked_relations - n_missing_relations) / n_masked_relations
@@ -90,7 +90,7 @@
 #             out.append(
 #                 f"{first} & {r['occ']:g} & {r['min']} & {fmt_int(r['n_masked'])} & "
 #                 f"{fmt_int(r['n_masked_relations'])} & {r['mrr']:.{mrr_digits}f} & "
-#                 f"{dom:.1f} & {rel:.1f} \\\\"
+#                 f"{dom:.2f} & {rel:.2f} \\\\"
 #             )
 #         if i < len(tkgs) - 1:
 #             out.append(r"\midrule")
@@ -141,7 +141,7 @@ de la méthode, seul tau (min) est un paramètre.
 
 Pour chaque TKG et chaque valeur de tau (min) :
   - #domaines masqués        = n_masked
-  - #relations masquées      = n_masked_relations
+  - #relations masquées dans les domaines atteints = n_masked_relations
   - MRR
   - % domaines atteints      = 100 * (n_masked - n_unreached) / n_masked
   - % relations atteintes    = 100 * (n_masked_relations - n_missing_relations) / n_masked_relations
@@ -214,8 +214,8 @@ def build_table(rows, names, caption, label, mrr_digits):
     out.append(r"\small")
     out.append(r"\begin{tabular}{lrrrrrr}")
     out.append(r"\toprule")
-    out.append(r"TKG & $\tau$ & \#Dom. masqués & \#Rel. masquées "
-               r"& MRR & \% Dom. atteints & \% Rel. atteintes \\")
+    out.append(r"TKG & $\tau$ & \#Masked domains & \#Masked relations "
+               r"& MRR & \% Reached domains & \% Reached relations \\")
     out.append(r"\midrule")
 
     tkgs = list(by_tkg)
@@ -230,7 +230,7 @@ def build_table(rows, names, caption, label, mrr_digits):
             out.append(
                 f"{first} & {r['min']} & {fmt_int(r['n_masked'])} & "
                 f"{fmt_int(r['n_masked_relations'])} & {r['mrr']:.{mrr_digits}f} & "
-                f"{dom:.1f} & {rel:.1f} \\\\"
+                f"{dom:.2f} & {rel:.2f} \\\\"
             )
         if i < len(tkgs) - 1:
             out.append(r"\midrule")
@@ -250,7 +250,7 @@ def main():
     ap.add_argument("--names", nargs="*", default=[],
                     help="renommage des TKG, ex. Q6256=Country")
     ap.add_argument("-o", "--output", help="fichier .tex de sortie (défaut : stdout)")
-    ap.add_argument("--caption", default="Résultats de complétion par TKG.")
+    ap.add_argument("--caption", default="Completion results by TKG.")
     ap.add_argument("--label", default="tab:mrr")
     ap.add_argument("--mrr-digits", type=int, default=3)
     args = ap.parse_args()

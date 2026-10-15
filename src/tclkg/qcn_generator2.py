@@ -120,6 +120,21 @@ def relation_entries(domain: Mapping[str, object]) -> dict[str, Mapping[str, obj
     return entries
 
 
+def filter_unobserved_relations_after_oracle(qcn: dict) -> dict:
+    """Retirer les relations sans occurrence, en conservant les arcs du QCN.
+
+    Un domaine sans observation reste inconnu avec un dictionnaire de relations
+    vide ; il peut recevoir des relations lors de la propagation.
+    """
+    filtered = copy.deepcopy(qcn)
+    for domain in filtered.values():
+        domain[RELATIONS_KEY] = {
+            relation: payload for relation, payload in relation_entries(domain).items()
+            if has_positive_support(payload[SUPPORT_KEY])
+        }
+    return filtered
+
+
 def relation_scores(domain: Mapping[str, object]) -> dict[str, float]:
     """Extract numeric supports from a constraint domain."""
     scores: dict[str, float] = {}
@@ -801,6 +816,7 @@ def learner2(
 
     oracle_phase_cpu_endtime = time.process_time() - oracle_phase_start
 
+    qcn = filter_unobserved_relations_after_oracle(qcn)
     qcn_after_oracle = qcn
 
 
@@ -1017,7 +1033,8 @@ def learnerTuned(
 
     oracle_phase_cpu_endtime = time.process_time() - oracle_phase_start
 
-    # Keep the untouched oracle result: the working QCN is masked below.
+    qcn = filter_unobserved_relations_after_oracle(qcn)
+    # Keep the filtered oracle result: the working QCN is masked below.
     qcn_after_oracle = copy.deepcopy(qcn)
 
 

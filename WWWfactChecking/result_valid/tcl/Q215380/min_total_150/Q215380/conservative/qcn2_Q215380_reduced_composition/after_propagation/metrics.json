@@ -1,0 +1,59 @@
+{
+  "kg": "Q215380",
+  "split": "valid",
+  "method": "tcl",
+  "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q215380/min_total_150/Q215380/conservative/qcn2_Q215380_reduced_composition.json",
+  "stage": "after_propagation",
+  "threshold": 0.9,
+  "relation_weight_threshold": 0.1,
+  "protocol": "candidate_interval_domains_vote_property_pairs",
+  "total": 26388,
+  "answered": 19890,
+  "correct": 13994,
+  "accuracy": 0.7035696329813977,
+  "coverage": 0.7537517053206003,
+  "abstentions": 6498,
+  "code_0_count": 13453,
+  "code_1_count": 6437,
+  "code_2_count": 6374,
+  "code_3_count": 124,
+  "code_4_count": 0,
+  "abstention_breakdown": [
+    {
+      "code": 2,
+      "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+      "count": 6374,
+      "total_facts": 26388,
+      "total_abstentions": 6498,
+      "percent_of_facts": 24.154918902531453,
+      "percent_of_abstentions": 98.09172052939365
+    },
+    {
+      "code": 4,
+      "reason": "Comparaisons avec dates inconnues uniquement",
+      "count": 0,
+      "total_facts": 26388,
+      "total_abstentions": 6498,
+      "percent_of_facts": 0.0,
+      "percent_of_abstentions": 0.0
+    },
+    {
+      "code": "3a",
+      "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+      "count": 14,
+      "total_facts": 26388,
+      "total_abstentions": 6498,
+      "percent_of_facts": 0.053054418675155375,
+      "percent_of_abstentions": 0.2154509079716836
+    },
+    {
+      "code": "3b",
+      "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+      "count": 110,
+      "total_facts": 26388,
+      "total_abstentions": 6498,
+      "percent_of_facts": 0.41685614673336363,
+      "percent_of_abstentions": 1.6928285626346569
+    }
+  ]
+}

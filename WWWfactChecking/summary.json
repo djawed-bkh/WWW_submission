@@ -1,0 +1,26 @@
+[
+  {
+    "kg": "Q82955",
+    "input": "/home/djawad/Documents/Dev/ISWC-submission/data/Q82955/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 128,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/Q82955/min_total_128/learner2.log",
+    "result": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/Q82955/min_total_128/Q82955/conservative/qcn2_Q82955_reduced_composition.json",
+    "status": "completed"
+  },
+  {
+    "kg": "Q82955",
+    "input": "/home/djawad/Documents/Dev/ISWC-submission/data/Q82955/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 1185,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/Q82955/min_total_1185/learner2.log",
+    "result": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/Q82955/min_total_1185/Q82955/conservative/qcn2_Q82955_reduced_composition.json",
+    "status": "completed"
+  }
+]

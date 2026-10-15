@@ -1,0 +1,356 @@
+[
+  {
+    "kg": "Q215380",
+    "split": "valid",
+    "method": "tcl",
+    "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q215380/min_total_150/Q215380/conservative/qcn2_Q215380_reduced_composition.json",
+    "stage": "after_propagation",
+    "threshold": 0.9,
+    "relation_weight_threshold": 0.1,
+    "protocol": "candidate_interval_domains_vote_property_pairs",
+    "total": 26388,
+    "answered": 19890,
+    "correct": 13994,
+    "accuracy": 0.7035696329813977,
+    "coverage": 0.7537517053206003,
+    "abstentions": 6498,
+    "code_0_count": 13453,
+    "code_1_count": 6437,
+    "code_2_count": 6374,
+    "code_3_count": 124,
+    "code_4_count": 0,
+    "abstention_breakdown": [
+      {
+        "code": 2,
+        "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+        "count": 6374,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 24.154918902531453,
+        "percent_of_abstentions": 98.09172052939365
+      },
+      {
+        "code": 4,
+        "reason": "Comparaisons avec dates inconnues uniquement",
+        "count": 0,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": "3a",
+        "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+        "count": 14,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 0.053054418675155375,
+        "percent_of_abstentions": 0.2154509079716836
+      },
+      {
+        "code": "3b",
+        "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+        "count": 110,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 0.41685614673336363,
+        "percent_of_abstentions": 1.6928285626346569
+      }
+    ]
+  },
+  {
+    "kg": "Q215380",
+    "split": "valid",
+    "method": "tcl",
+    "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q215380/min_total_30/Q215380/conservative/qcn2_Q215380_reduced_composition.json",
+    "stage": "after_propagation",
+    "threshold": 0.9,
+    "relation_weight_threshold": 0.1,
+    "protocol": "candidate_interval_domains_vote_property_pairs",
+    "total": 26388,
+    "answered": 19890,
+    "correct": 13995,
+    "accuracy": 0.7036199095022625,
+    "coverage": 0.7537517053206003,
+    "abstentions": 6498,
+    "code_0_count": 13452,
+    "code_1_count": 6438,
+    "code_2_count": 6374,
+    "code_3_count": 124,
+    "code_4_count": 0,
+    "abstention_breakdown": [
+      {
+        "code": 2,
+        "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+        "count": 6374,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 24.154918902531453,
+        "percent_of_abstentions": 98.09172052939365
+      },
+      {
+        "code": 4,
+        "reason": "Comparaisons avec dates inconnues uniquement",
+        "count": 0,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": "3a",
+        "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+        "count": 14,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 0.053054418675155375,
+        "percent_of_abstentions": 0.2154509079716836
+      },
+      {
+        "code": "3b",
+        "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+        "count": 110,
+        "total_facts": 26388,
+        "total_abstentions": 6498,
+        "percent_of_facts": 0.41685614673336363,
+        "percent_of_abstentions": 1.6928285626346569
+      }
+    ]
+  },
+  {
+    "kg": "Q6256",
+    "split": "valid",
+    "method": "tcl",
+    "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q6256/min_total_10/Q6256/conservative/qcn2_Q6256_reduced_composition.json",
+    "stage": "after_propagation",
+    "threshold": 0.9,
+    "relation_weight_threshold": 0.1,
+    "protocol": "candidate_interval_domains_vote_property_pairs",
+    "total": 36618,
+    "answered": 36606,
+    "correct": 23734,
+    "accuracy": 0.6483636562312189,
+    "coverage": 0.9996722923152548,
+    "abstentions": 12,
+    "code_0_count": 11923,
+    "code_1_count": 24683,
+    "code_2_count": 0,
+    "code_3_count": 12,
+    "code_4_count": 0,
+    "abstention_breakdown": [
+      {
+        "code": 2,
+        "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+        "count": 0,
+        "total_facts": 36618,
+        "total_abstentions": 12,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": 4,
+        "reason": "Comparaisons avec dates inconnues uniquement",
+        "count": 0,
+        "total_facts": 36618,
+        "total_abstentions": 12,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": "3a",
+        "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+        "count": 12,
+        "total_facts": 36618,
+        "total_abstentions": 12,
+        "percent_of_facts": 0.03277076847452073,
+        "percent_of_abstentions": 100.0
+      },
+      {
+        "code": "3b",
+        "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+        "count": 0,
+        "total_facts": 36618,
+        "total_abstentions": 12,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      }
+    ]
+  },
+  {
+    "kg": "Q6256",
+    "split": "valid",
+    "method": "tcl",
+    "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q6256/min_total_190/Q6256/conservative/qcn2_Q6256_reduced_composition.json",
+    "stage": "after_propagation",
+    "threshold": 0.9,
+    "relation_weight_threshold": 0.1,
+    "protocol": "candidate_interval_domains_vote_property_pairs",
+    "total": 36618,
+    "answered": 36604,
+    "correct": 23732,
+    "accuracy": 0.6483444432302481,
+    "coverage": 0.9996176743677972,
+    "abstentions": 14,
+    "code_0_count": 11922,
+    "code_1_count": 24682,
+    "code_2_count": 0,
+    "code_3_count": 14,
+    "code_4_count": 0,
+    "abstention_breakdown": [
+      {
+        "code": 2,
+        "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+        "count": 0,
+        "total_facts": 36618,
+        "total_abstentions": 14,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": 4,
+        "reason": "Comparaisons avec dates inconnues uniquement",
+        "count": 0,
+        "total_facts": 36618,
+        "total_abstentions": 14,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": "3a",
+        "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+        "count": 12,
+        "total_facts": 36618,
+        "total_abstentions": 14,
+        "percent_of_facts": 0.03277076847452073,
+        "percent_of_abstentions": 85.71428571428571
+      },
+      {
+        "code": "3b",
+        "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+        "count": 2,
+        "total_facts": 36618,
+        "total_abstentions": 14,
+        "percent_of_facts": 0.0054617947457534545,
+        "percent_of_abstentions": 14.285714285714286
+      }
+    ]
+  },
+  {
+    "kg": "Q82955",
+    "split": "valid",
+    "method": "tcl",
+    "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q82955/min_total_1185/Q82955/conservative/qcn2_Q82955_reduced_composition.json",
+    "stage": "after_propagation",
+    "threshold": 0.9,
+    "relation_weight_threshold": 0.1,
+    "protocol": "candidate_interval_domains_vote_property_pairs",
+    "total": 415270,
+    "answered": 352290,
+    "correct": 240810,
+    "accuracy": 0.6835561611172614,
+    "coverage": 0.8483396344546922,
+    "abstentions": 62980,
+    "code_0_count": 239673,
+    "code_1_count": 112617,
+    "code_2_count": 56150,
+    "code_3_count": 6830,
+    "code_4_count": 0,
+    "abstention_breakdown": [
+      {
+        "code": 2,
+        "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+        "count": 56150,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 13.521323476292533,
+        "percent_of_abstentions": 89.15528739282311
+      },
+      {
+        "code": 4,
+        "reason": "Comparaisons avec dates inconnues uniquement",
+        "count": 0,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": "3a",
+        "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+        "count": 34,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 0.00818744431333831,
+        "percent_of_abstentions": 0.05398539218799619
+      },
+      {
+        "code": "3b",
+        "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+        "count": 6796,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 1.6365256339249163,
+        "percent_of_abstentions": 10.790727214988886
+      }
+    ]
+  },
+  {
+    "kg": "Q82955",
+    "split": "valid",
+    "method": "tcl",
+    "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q82955/min_total_128/Q82955/conservative/qcn2_Q82955_reduced_composition.json",
+    "stage": "after_propagation",
+    "threshold": 0.9,
+    "relation_weight_threshold": 0.1,
+    "protocol": "candidate_interval_domains_vote_property_pairs",
+    "total": 415270,
+    "answered": 352290,
+    "correct": 240813,
+    "accuracy": 0.683564676828749,
+    "coverage": 0.8483396344546922,
+    "abstentions": 62980,
+    "code_0_count": 239670,
+    "code_1_count": 112620,
+    "code_2_count": 56150,
+    "code_3_count": 6830,
+    "code_4_count": 0,
+    "abstention_breakdown": [
+      {
+        "code": 2,
+        "reason": "Entit\u00e9 absente des faits de r\u00e9f\u00e9rence",
+        "count": 56150,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 13.521323476292533,
+        "percent_of_abstentions": 89.15528739282311
+      },
+      {
+        "code": 4,
+        "reason": "Comparaisons avec dates inconnues uniquement",
+        "count": 0,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 0.0,
+        "percent_of_abstentions": 0.0
+      },
+      {
+        "code": "3a",
+        "reason": "Aucune contrainte retenue pour la propri\u00e9t\u00e9",
+        "count": 34,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 0.00818744431333831,
+        "percent_of_abstentions": 0.05398539218799619
+      },
+      {
+        "code": "3b",
+        "reason": "Aucun fait de r\u00e9f\u00e9rence pour les propri\u00e9t\u00e9s associ\u00e9es",
+        "count": 6796,
+        "total_facts": 415270,
+        "total_abstentions": 62980,
+        "percent_of_facts": 1.6365256339249163,
+        "percent_of_abstentions": 10.790727214988886
+      }
+    ]
+  }
+]

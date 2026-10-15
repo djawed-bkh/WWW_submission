@@ -1,0 +1,21 @@
+{
+  "kg": "Q215380",
+  "split": "valid",
+  "method": "tcl",
+  "rules": "/home/djawad/Documents/Dev/ISWC-submission/WWWfactChecking/result_train/tcl/Q215380/min_total_30/Q215380/conservative/qcn2_Q215380_reduced_composition.json",
+  "stage": "after_oracle",
+  "threshold": 0.6,
+  "relation_weight_threshold": 0.1,
+  "protocol": "candidate_interval_domains_vote_property_pairs",
+  "total": 26388,
+  "answered": 19890,
+  "correct": 13112,
+  "accuracy": 0.6592257415786827,
+  "coverage": 0.7537517053206003,
+  "abstentions": 6498,
+  "code_0_count": 15543,
+  "code_1_count": 4347,
+  "code_2_count": 6374,
+  "code_3_count": 124,
+  "code_4_count": 0
+}

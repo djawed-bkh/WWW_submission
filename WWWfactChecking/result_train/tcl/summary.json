@@ -1,0 +1,74 @@
+[
+  {
+    "kg": "Q215380",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/data/Q215380/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 30,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q215380/min_total_30/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q215380/min_total_30/Q215380/conservative/qcn2_Q215380_reduced_composition.json",
+    "status": "completed"
+  },
+  {
+    "kg": "Q215380",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/data/Q215380/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 150,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q215380/min_total_150/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q215380/min_total_150/Q215380/conservative/qcn2_Q215380_reduced_composition.json",
+    "status": "completed"
+  },
+  {
+    "kg": "Q6256",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/data/Q6256/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 10,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q6256/min_total_10/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q6256/min_total_10/Q6256/conservative/qcn2_Q6256_reduced_composition.json",
+    "status": "completed"
+  },
+  {
+    "kg": "Q6256",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/data/Q6256/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 190,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q6256/min_total_190/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q6256/min_total_190/Q6256/conservative/qcn2_Q6256_reduced_composition.json",
+    "status": "completed"
+  },
+  {
+    "kg": "Q82955",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/data/Q82955/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 128,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q82955/min_total_128/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q82955/min_total_128/Q82955/conservative/qcn2_Q82955_reduced_composition.json",
+    "status": "completed"
+  },
+  {
+    "kg": "Q82955",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/data/Q82955/train_cst_knowledge.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 1185,
+    "timeout_seconds": 3600,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q82955/min_total_1185/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/WWWfactChecking/Q82955/min_total_1185/Q82955/conservative/qcn2_Q82955_reduced_composition.json",
+    "status": "completed"
+  }
+]

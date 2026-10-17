@@ -30,6 +30,9 @@ Trash.txt
 .coverage
 resume_last_session.sh
 
+# Reproducible performance snapshots and regenerated large outputs
+performance_artifacts/
+
 # Fichiers de données volumineux
 data/Q82955/
 *.quintuplet

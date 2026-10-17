@@ -1,32 +1,45 @@
 import argparse
 import copy
 import json
-from collections.abc import Mapping
-from collections import deque
-from functools import lru_cache
-import os
-from itertools import combinations
 import multiprocessing as mp
-import time
+import os
 import random
+import subprocess
+import sys
+import time
+from collections import deque
+from collections.abc import Collection, Mapping
+from functools import lru_cache
+from itertools import combinations
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from .allen_list import ALLEN_COMPOSE, ALLEN_CONVERSE, ALLEN_RELATIONS
 from .generator_common import (
     RESULTS_ROOT as results_root,
+)
+from .generator_common import (
+    ROOT_DATA,
+)
+from .generator_common import (
     build_scored_networkwithThreshold as build_entity_network,
+)
+from .generator_common import (
     read_kg as read_KG,
 )
+from .oracle_cache import oracle_cache_path as get_oracle_cache_path
+from .oracle_cache import read_oracle_cache, write_oracle_cache
+from .time_package import Entity
 
-
-PROPERTY_SUPPORT_THRESHOLD = 1.0 # maybe to set later to 1.0
+PROPERTY_SUPPORT_THRESHOLD = 1.0  # maybe to set later to 1.0
 SUPPORT_KEY = "support"
 INFERRED_SCORE_KEY = "inferred_score"
 STATUS_KEY = "status"
 RELATIONS_KEY = "relations"
 STATUS_OBSERVED = "Observed"
-#STATUS_REPAIRED = "Repaired"
+# STATUS_REPAIRED = "Repaired"
 STATUS_INFERRED = "Inferred"
 STATUS_INFERRED_LEGACY_TYPO = "Infered"
 SupportCounts = tuple[int, int]
@@ -82,7 +95,7 @@ def normalize_relation_status(status: object) -> str | None:
         return STATUS_OBSERVED
     if normalized in {"inferred", "infered"}:
         return STATUS_INFERRED
-    #if normalized == "repaired":
+    # if normalized == "repaired":
     #    return STATUS_REPAIRED
     return status
 
@@ -96,7 +109,7 @@ def relation_entries(domain: Mapping[str, object]) -> dict[str, Mapping[str, obj
     """Extract per-relation payloads from a constraint domain."""
     relations_obj = domain.get(RELATIONS_KEY)
     if not isinstance(relations_obj, Mapping):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 -- Preserve the existing validation API.
             "Invalid scored domain format: expected a 'relations' mapping for each constraint domain."
         )
     entries: dict[str, Mapping[str, object]] = {}
@@ -104,7 +117,7 @@ def relation_entries(domain: Mapping[str, object]) -> dict[str, Mapping[str, obj
         if relation not in ALLEN_RELATIONS:
             continue
         if not isinstance(payload, Mapping):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 -- Preserve the existing validation API.
                 f"Invalid scored domain format: relation '{relation}' must map to a payload."
             )
         if SUPPORT_KEY not in payload:
@@ -114,7 +127,7 @@ def relation_entries(domain: Mapping[str, object]) -> dict[str, Mapping[str, obj
         support = payload.get(SUPPORT_KEY)
         if support_counts(support) is None:
             raise ValueError(
-            f"Invalid scored domain format: relation '{relation}' must have an (occurrences, total) support pair."
+                f"Invalid scored domain format: relation '{relation}' must have an (occurrences, total) support pair."
             )
         entries[relation] = payload
     return entries
@@ -126,13 +139,22 @@ def filter_unobserved_relations_after_oracle(qcn: dict) -> dict:
     Un domaine sans observation reste inconnu avec un dictionnaire de relations
     vide ; il peut recevoir des relations lors de la propagation.
     """
-    filtered = copy.deepcopy(qcn)
-    for domain in filtered.values():
-        domain[RELATIONS_KEY] = {
-            relation: payload for relation, payload in relation_entries(domain).items()
-            if has_positive_support(payload[SUPPORT_KEY])
+    # Do not clone the zero-support payloads that are about to be discarded.
+    return {
+        pair: {
+            **{
+                key: copy.deepcopy(value)
+                for key, value in domain.items()
+                if key != RELATIONS_KEY
+            },
+            RELATIONS_KEY: {
+                relation: copy.deepcopy(payload)
+                for relation, payload in relation_entries(domain).items()
+                if has_positive_support(payload[SUPPORT_KEY])
+            },
         }
-    return filtered
+        for pair, domain in qcn.items()
+    }
 
 
 def relation_scores(domain: Mapping[str, object]) -> dict[str, float]:
@@ -161,21 +183,22 @@ def with_relation_data(relations: Mapping[str, SupportCounts]) -> dict[str, obje
     return {
         STATUS_KEY: computed_domain_status,
         RELATIONS_KEY: {
-            relation: {SUPPORT_KEY: support}
-            for relation, support in relations.items()
-        }
+            relation: {SUPPORT_KEY: support} for relation, support in relations.items()
+        },
     }
 
 
 def build_output_stem(kg_type: str, reduced_composition: bool = True) -> str:
     """Build the base filename stem for Generator2 outputs."""
-    composition_label = "reduced_composition" if reduced_composition else "non_reduced_composition"
+    composition_label = (
+        "reduced_composition" if reduced_composition else "non_reduced_composition"
+    )
     return f"qcn2_{kg_type}_{composition_label}"
 
 
 def build_oracle_property_index(
-    entities: Mapping[str, object],
-    properties: set[str] | list[str] | tuple[str, ...],
+    entities: Mapping[str, Entity],
+    properties: Collection[str],
 ) -> dict[str, dict[str, object]]:
     """Index triples by property and entity for repeated oracle queries."""
     property_filter = set(properties)
@@ -188,7 +211,9 @@ def build_oracle_property_index(
                 triples_tuple = tuple(triples)
                 starts = [triple.date.start for triple in triples_tuple]
                 ends = [triple.date.end for triple in triples_tuple]
-                if any(start is None for start in starts) or any(end is None for end in ends):
+                if any(start is None for start in starts) or any(
+                    end is None for end in ends
+                ):
                     index[property_][entity_name] = triples_tuple
                 else:
                     index[property_][entity_name] = (
@@ -198,8 +223,8 @@ def build_oracle_property_index(
     return index
 
 
-def add_vectorized_allen_relation_matches(
-    allenrel_matching: dict[str, float],
+def add_vectorized_allen_relation_matches[Count: (int, float)](
+    allenrel_matching: dict[str, Count],
     a_starts: np.ndarray,
     a_ends: np.ndarray,
     b_starts: np.ndarray,
@@ -210,6 +235,20 @@ def add_vectorized_allen_relation_matches(
     total_pairs = 0
     if len(a_starts) == 0 or len(b_starts) == 0:
         return total_pairs
+
+    if (
+        len(a_starts) == len(b_starts) == 1
+        and a_starts.dtype.kind in "iu"
+        and b_starts.dtype.kind in "iu"
+    ):
+        _add_interval_relation_matches(
+            allenrel_matching,
+            a_starts[0].item(),
+            a_ends[0].item(),
+            b_starts[0].item(),
+            b_ends[0].item(),
+        )
+        return 1
 
     rows_per_chunk = max(1, max_cells_per_chunk // len(b_starts))
     b_starts_row = b_starts[None, :]
@@ -222,7 +261,9 @@ def add_vectorized_allen_relation_matches(
         total_pairs += (end - start) * len(b_starts)
 
         allenrel_matching["equals"] += int(
-            np.count_nonzero((a_starts_col == b_starts_row) & (a_ends_col == b_ends_row))
+            np.count_nonzero(
+                (a_starts_col == b_starts_row) & (a_ends_col == b_ends_row)
+            )
         )
         allenrel_matching["before"] += int(np.count_nonzero(a_ends_col < b_starts_row))
         allenrel_matching["after"] += int(np.count_nonzero(b_ends_row < a_starts_col))
@@ -264,14 +305,24 @@ def add_vectorized_allen_relation_matches(
     return total_pairs
 
 
-def add_allen_relation_matches(allenrel_matching: dict[str, float], qp1, qp2) -> None:
+def add_allen_relation_matches[Count: (int, float)](
+    allenrel_matching: dict[str, Count], qp1, qp2
+) -> None:
     """Increment all Allen relations matching two triple intervals."""
     interval_a = qp1.date
     interval_b = qp2.date
-    a_start = interval_a.start
-    a_end = interval_a.end
-    b_start = interval_b.start
-    b_end = interval_b.end
+    _add_interval_relation_matches(
+        allenrel_matching,
+        interval_a.start,
+        interval_a.end,
+        interval_b.start,
+        interval_b.end,
+    )
+
+
+def _add_interval_relation_matches(
+    allenrel_matching, a_start, a_end, b_start, b_end
+) -> None:
 
     if a_start == b_start and a_end == b_end:
         allenrel_matching["equals"] += 1
@@ -301,7 +352,7 @@ def add_allen_relation_matches(allenrel_matching: dict[str, float], qp1, qp2) ->
         allenrel_matching["finished_by"] += 1
 
 
-def fast_converse_domain(domain: Mapping[str, object]) -> dict[str, object]:
+def fast_converse_domain(domain: Mapping[str, Any]) -> dict[str, object]:
     """Build a converse domain without re-validating the hot-path payload shape."""
     return {
         STATUS_KEY: domain.get(STATUS_KEY),
@@ -315,7 +366,7 @@ def fast_converse_domain(domain: Mapping[str, object]) -> dict[str, object]:
                 ),
             }
             for relation, payload in domain[RELATIONS_KEY].items()
-        }
+        },
     }
 
 
@@ -332,7 +383,9 @@ def _compose_allen_scores_cached(
             # continue
         for r2, score2 in right_items:
             if score2 < 0:
-                raise ValueError(f"Invalid score {score2} for relation {r2} in right_items")
+                raise ValueError(
+                    f"Invalid score {score2} for relation {r2} in right_items"
+                )
                 # continue
             min_score = min(score1, score2)
             composed_relations = ALLEN_COMPOSE[(r1, r2)]
@@ -346,7 +399,8 @@ def _compose_allen_scores_cached(
 
 
 def compose_allen_scores_fast(
-    left_domain: dict[str, float], right_domain: dict[str, float],
+    left_domain: dict[str, float],
+    right_domain: dict[str, float],
     reduced_composition: bool = True,
 ) -> dict[str, float]:
     """Compose scored Allen domains with memoization for repeated propagation states."""
@@ -354,9 +408,9 @@ def compose_allen_scores_fast(
         return {}
     left_items = tuple(sorted(left_domain.items()))
     right_items = tuple(sorted(right_domain.items()))
-    return dict(_compose_allen_scores_cached(left_items, right_items, reduced_composition))
-
-
+    return dict(
+        _compose_allen_scores_cached(left_items, right_items, reduced_composition)
+    )
 
 
 def propagateAndFilterConservative(
@@ -365,175 +419,106 @@ def propagateAndFilterConservative(
     relation_occurrence_threshold: float = 0.0,
     reduced_composition: bool = True,
 ) -> dict:
-    '''
-    prend en entrée le qcn résultant du learner.
-    domain_reliability_threshold et relation_occurrence_threshold filtrent les
-    relations observées pouvant servir de source de composition : seules les
-    relations dont le total testé >= domain_reliability_threshold et dont le
-    ratio occurrences/total >= relation_occurrence_threshold sont composables.
+    """Compose frozen observed sources, visiting only eligible two-edge paths.
 
-    Compose uniquement des domaines observés.
-    '''
-    qcn_copy = copy.deepcopy(qcn)
+    Inferred targets never become sources in conservative propagation. Replaying
+    them in a work queue therefore cannot add evidence. Keep the original source
+    and intermediary order so converse updates retain the same semantics.
+    """
+    result = copy.deepcopy(qcn)
+    properties = sorted({p for pair in result for p in pair})
+    if len(properties) >= 3:
+        for i in properties:
+            for k in properties:
+                if i != k and (i, k) not in result:
+                    raise ValueError(
+                        f"Missing arc in qcn_copy during propagation: {(i, k)}"
+                    )
 
-    def is_composable_evidence(support: object, ratio: float | None) -> bool:
-        counts = support_counts(support)
-        if counts is None or ratio is None:
-            return False
-        return (
-            counts[1] >= domain_reliability_threshold
-            and ratio >= relation_occurrence_threshold
-        )
-
-    def relation_payloads(domain: Mapping[str, object]) -> Mapping[str, object]:
-        return domain[RELATIONS_KEY]
-
-    def append_queue(pair: tuple[str, str]) -> None:
-        if pair not in queued:
-            queue.append(pair)
-            queued.add(pair)
-
-    positive_scores_cache: dict[tuple[str, str], dict[str, float]] = {}
-    composable_scores_cache: dict[tuple[str, str], dict[str, float]] = {}
-    observed_status_cache: dict[tuple[str, str], bool] = {}
-
-    def refresh_domain_cache(pair: tuple[str, str]) -> None:
-        positive_scores: dict[str, float] = {}
-        composable_scores: dict[str, float] = {}
-        domain_is_observed = domain_status(qcn_copy[pair]) == STATUS_OBSERVED
-        for relation, payload in relation_payloads(qcn_copy[pair]).items():
-            support = payload.get(SUPPORT_KEY)
+    positive = {}
+    composable = {}
+    observed = {}
+    outgoing = {p: set() for p in properties}
+    incoming = {p: set() for p in properties}
+    for pair, domain in result.items():
+        observed[pair] = domain_status(domain) == STATUS_OBSERVED
+        scores = {}
+        eligible = {}
+        for relation, payload in domain[RELATIONS_KEY].items():
+            support = support_counts(payload.get(SUPPORT_KEY))
             ratio = support_ratio(support)
-            if ratio is not None and ratio > 0:
-                positive_scores[relation] = ratio
-                if domain_is_observed and is_composable_evidence(support, ratio):
-                    composable_scores[relation] = ratio
-        positive_scores_cache[pair] = positive_scores
-        composable_scores_cache[pair] = composable_scores
-        observed_status_cache[pair] = domain_is_observed
+            if support is not None and ratio is not None and ratio > 0:
+                scores[relation] = ratio
+                if (
+                    observed[pair]
+                    and support[1] >= domain_reliability_threshold
+                    and ratio >= relation_occurrence_threshold
+                ):
+                    eligible[relation] = ratio
+        positive[pair] = scores
+        composable[pair] = eligible
+        if eligible:
+            outgoing[pair[0]].add(pair[1])
+            incoming[pair[1]].add(pair[0])
 
-    def update_relation(pair: tuple[str, str], relation: str, score: float) -> None:
-        existing_counts = support_counts(
-            relation_payloads(qcn_copy[pair]).get(relation, {}).get(SUPPORT_KEY)
-        )
-        stored_counts = existing_counts if existing_counts is not None else (0, 0)
-        support_float = float(score)
-        relation_payloads(qcn_copy[pair])[relation] = {
-            SUPPORT_KEY: stored_counts,
-            INFERRED_SCORE_KEY: support_float,
+    def update(pair, relation, score):
+        entries = result[pair][RELATIONS_KEY]
+        counts = support_counts(entries.get(relation, {}).get(SUPPORT_KEY)) or (0, 0)
+        reverse = (pair[1], pair[0])
+        converse = ALLEN_CONVERSE[relation]
+        entries[relation] = {SUPPORT_KEY: counts, INFERRED_SCORE_KEY: float(score)}
+        result[reverse][RELATIONS_KEY][converse] = {
+            SUPPORT_KEY: counts,
+            INFERRED_SCORE_KEY: float(score),
         }
-        converse_pair = (pair[1], pair[0])
-        converse_relation = ALLEN_CONVERSE[relation]
-        relation_payloads(qcn_copy[converse_pair])[converse_relation] = {
-            SUPPORT_KEY: stored_counts,
-            INFERRED_SCORE_KEY: support_float,
-        }
+        for target in (pair, reverse):
+            if domain_status(result[target]) != STATUS_OBSERVED:
+                result[target][STATUS_KEY] = STATUS_INFERRED
+        positive[pair][relation] = float(score)
+        positive[reverse][converse] = float(score)
 
-        # une composition réussie rend tout le domaine "Inferred" (sauf s'il est déjà Observed)
-        if domain_status(qcn_copy[pair]) != STATUS_OBSERVED:
-            qcn_copy[pair][STATUS_KEY] = STATUS_INFERRED
-        if domain_status(qcn_copy[converse_pair]) != STATUS_OBSERVED:
-            qcn_copy[converse_pair][STATUS_KEY] = STATUS_INFERRED
-
-        positive_scores_cache[pair][relation] = support_float
-        positive_scores_cache[converse_pair][converse_relation] = support_float
-
-    properties = sorted(
-        {p for (x, y) in qcn_copy.keys() for p in (x, y)}
-    )
-
-    queue = deque(qcn_copy.keys())
-    queued = set(qcn_copy.keys())
-    for pair in qcn_copy:
-        refresh_domain_cache(pair)
-
-    while queue:
-        i, j = queue.popleft()
-        queued.discard((i, j))
-
-        for k in properties:
+    for (i, j), left in composable.items():
+        if not left:
+            continue
+        for k in sorted(outgoing[j] | incoming[i]):
             if k == i or k == j:
                 continue
-            if (i, k) not in qcn_copy or (k, j) not in qcn_copy:
-                print(
-                    "Warning: missing arc in qcn_copy during propagation:",
-                    (i, k),
-                    "or",
-                    (k, j),
-                    "this should not happen !",
+            if not observed[(i, k)] and composable[(j, k)]:
+                composition = compose_allen_scores_fast(
+                    left, composable[(j, k)], reduced_composition
                 )
-                raise ValueError(
-                    f"Missing arc in qcn_copy during propagation: {(i, k)} or {(k, j)}"
+                for relation, score in composition.items():
+                    if (
+                        relation not in positive[(i, k)]
+                        or score > positive[(i, k)][relation]
+                    ):
+                        update((i, k), relation, score)
+            if not observed[(k, j)] and composable[(k, i)]:
+                composition = compose_allen_scores_fast(
+                    composable[(k, i)], left, reduced_composition
                 )
+                for relation, score in composition.items():
+                    if (
+                        relation not in positive[(k, j)]
+                        or score > positive[(k, j)][relation]
+                    ):
+                        update((k, j), relation, score)
 
-
-            ik_pair = (i, k)
-            kj_pair = (k, j)
-            ij_pair = (i, j)
-            jk_pair = (j, k)
-            ki_pair = (k, i)
-
-            ik_relations = positive_scores_cache[ik_pair]
-            kj_relations = positive_scores_cache[kj_pair]
-
-            relations_to_compose_ij = composable_scores_cache[ij_pair]
-            relations_to_compose_jk = composable_scores_cache[jk_pair]
-            relations_to_compose_ki = composable_scores_cache[ki_pair]
-
-
-            positive_support_ij = bool(relations_to_compose_ij)
-            positive_support_jk = bool(relations_to_compose_jk)
-            positive_support_ki = bool(relations_to_compose_ki)
-            target_ik_is_observed = observed_status_cache[ik_pair]
-            target_kj_is_observed = observed_status_cache[kj_pair]
-
-
-            if (not target_ik_is_observed) and positive_support_ij and positive_support_jk:
-
-                composition = compose_allen_scores_fast(relations_to_compose_ij, relations_to_compose_jk, reduced_composition)
-                for c, score in composition.items():
-                    if c not in ik_relations or score > ik_relations[c]:
-                        update_relation((i, k), c, score)
-                        append_queue((i, k))
-
-            if (not target_kj_is_observed) and positive_support_ki and positive_support_ij:
-
-                composition = compose_allen_scores_fast(relations_to_compose_ki, relations_to_compose_ij, reduced_composition)
-                for c, score in composition.items():
-                    if c not in kj_relations or score > kj_relations[c]:
-                        update_relation((k, j), c, score)
-                        append_queue((k, j))
-
-    for pair, domain in qcn_copy.items():
+    for domain in result.values():
         status = domain_status(domain)
-        entries = relation_payloads(domain)
-
         if status == STATUS_INFERRED:
-            # Un domaine inféré ne doit contenir que les relations produites
-            # avec succès par la propagation.
-            relations_to_remove = [
-                relation
-                for relation, payload in entries.items()
-                if INFERRED_SCORE_KEY not in payload
-            ]
+            domain[RELATIONS_KEY] = {
+                relation: payload
+                for relation, payload in domain[RELATIONS_KEY].items()
+                if INFERRED_SCORE_KEY in payload
+            }
         elif status == STATUS_OBSERVED:
-            relations_to_remove = [
-                relation
-                for relation, payload in entries.items()
-                if not has_positive_support(payload.get(SUPPORT_KEY))
-            ]
-        else:
-            continue
-
-        for relation in relations_to_remove:
-            del entries[relation]
-
-    return qcn_copy
-
-
-
-
-
+            domain[RELATIONS_KEY] = {
+                relation: payload
+                for relation, payload in domain[RELATIONS_KEY].items()
+                if has_positive_support(payload.get(SUPPORT_KEY))
+            }
+    return result
 
 
 def propagateAndFilterTwoStage(
@@ -544,8 +529,11 @@ def propagateAndFilterTwoStage(
 ) -> dict:
     """Run exactly up to two frozen stages and record inference_stage."""
     return propagateAndFilterStrass(
-        qcn, domain_reliability_threshold, relation_occurrence_threshold,
-        reduced_composition, max_stages=2,
+        qcn,
+        domain_reliability_threshold,
+        relation_occurrence_threshold,
+        reduced_composition,
+        max_stages=2,
     )
 
 
@@ -563,11 +551,16 @@ def propagateAndFilterStrass(
     All paths contribute before a new domain is frozen and becomes a source.
     inference_stage records its first stage. None means no stage limit.
     """
-    if max_stages is not None and (isinstance(max_stages, bool)
-            or not isinstance(max_stages, int) or max_stages < 1):
+    if max_stages is not None and (
+        isinstance(max_stages, bool)
+        or not isinstance(max_stages, int)
+        or max_stages < 1
+    ):
         raise ValueError("max_stages must be a positive integer or None")
     qcn_copy = propagateAndFilterConservative(
-        qcn, domain_reliability_threshold, relation_occurrence_threshold,
+        qcn,
+        domain_reliability_threshold,
+        relation_occurrence_threshold,
         reduced_composition,
     )
     for domain in qcn_copy.values():
@@ -588,14 +581,22 @@ def propagateAndFilterStrass(
             for relation, payload in domain[RELATIONS_KEY].items():
                 if status == STATUS_INFERRED:
                     score = payload.get(INFERRED_SCORE_KEY)
-                    if isinstance(score, (int, float)) and not isinstance(score, bool) and 0 < score <= 1:
+                    if (
+                        isinstance(score, (int, float))
+                        and not isinstance(score, bool)
+                        and 0 < score <= 1
+                    ):
                         scores[relation] = float(score)
                 elif status == STATUS_OBSERVED:
                     support = support_counts(payload.get(SUPPORT_KEY))
                     ratio = support_ratio(support)
-                    if (ratio is not None and ratio > 0
-                            and support[1] >= domain_reliability_threshold
-                            and ratio >= relation_occurrence_threshold):
+                    if (
+                        support is not None
+                        and ratio is not None
+                        and ratio > 0
+                        and support[1] >= domain_reliability_threshold
+                        and ratio >= relation_occurrence_threshold
+                    ):
                         scores[relation] = ratio
             sources[pair] = scores
 
@@ -607,7 +608,9 @@ def propagateAndFilterStrass(
                 if j == i or j == k:
                     continue
                 composition = compose_allen_scores_fast(
-                    sources[(i, j)], sources[(j, k)], reduced_composition,
+                    sources[(i, j)],
+                    sources[(j, k)],
+                    reduced_composition,
                 )
                 for relation, score in composition.items():
                     inferred[relation] = max(score, inferred.get(relation, score))
@@ -620,10 +623,13 @@ def propagateAndFilterStrass(
                 old_score = previous.get(INFERRED_SCORE_KEY)
                 if old_score is None or score > old_score:
                     entries[relation] = {
-                        SUPPORT_KEY: support_counts(previous.get(SUPPORT_KEY)) or (0, 0),
+                        SUPPORT_KEY: support_counts(previous.get(SUPPORT_KEY))
+                        or (0, 0),
                         INFERRED_SCORE_KEY: score,
                     }
-                    qcn_copy[(k, i)][RELATIONS_KEY][ALLEN_CONVERSE[relation]] = dict(entries[relation])
+                    qcn_copy[(k, i)][RELATIONS_KEY][ALLEN_CONVERSE[relation]] = dict(
+                        entries[relation]
+                    )
             for pair in ((i, k), (k, i)):
                 qcn_copy[pair][STATUS_KEY] = STATUS_INFERRED
                 qcn_copy[pair]["inference_stage"] = stage
@@ -632,11 +638,12 @@ def propagateAndFilterStrass(
                     for relation, payload in qcn_copy[pair][RELATIONS_KEY].items()
                     if INFERRED_SCORE_KEY in payload
                 }
-        if not any(domain_status(qcn_copy[pair]) == STATUS_INFERRED for pair in remaining_pairs):
+        if not any(
+            domain_status(qcn_copy[pair]) == STATUS_INFERRED for pair in remaining_pairs
+        ):
             break
         stage += 1
     return qcn_copy
-
 
 
 def propagateAndFilterIterative(
@@ -673,14 +680,21 @@ def propagateAndFilterIterative(
             if status == STATUS_OBSERVED:
                 counts = support_counts(payload.get(SUPPORT_KEY))
                 score = support_ratio(counts)
-                if (score is not None and score > 0
-                        and counts[1] >= domain_reliability_threshold
-                        and score >= relation_occurrence_threshold):
+                if (
+                    counts is not None
+                    and score is not None
+                    and score > 0
+                    and counts[1] >= domain_reliability_threshold
+                    and score >= relation_occurrence_threshold
+                ):
                     scores[relation] = score
             elif status == STATUS_INFERRED:
                 score = payload.get(INFERRED_SCORE_KEY)
-                if (isinstance(score, (int, float)) and not isinstance(score, bool)
-                        and 0 < score <= 1):
+                if (
+                    isinstance(score, (int, float))
+                    and not isinstance(score, bool)
+                    and 0 < score <= 1
+                ):
                     scores[relation] = float(score)
         sources[pair] = scores
 
@@ -697,19 +711,25 @@ def propagateAndFilterIterative(
         ):
             return
         composition = compose_allen_scores_fast(
-            sources[(i, j)], sources[(j, k)], reduced_composition,
+            sources[(i, j)],
+            sources[(j, k)],
+            reduced_composition,
         )
         if not composition:
             return
         changed = set()
         for relation, score in composition.items():
-            for target, target_relation in ((pair, relation), (reverse, ALLEN_CONVERSE[relation])):
+            for target, target_relation in (
+                (pair, relation),
+                (reverse, ALLEN_CONVERSE[relation]),
+            ):
                 entries = result[target][RELATIONS_KEY]
                 previous = entries.get(target_relation, {})
                 old_score = previous.get(INFERRED_SCORE_KEY)
                 if old_score is None or score > old_score:
                     entries[target_relation] = {
-                        SUPPORT_KEY: support_counts(previous.get(SUPPORT_KEY)) or (0, 0),
+                        SUPPORT_KEY: support_counts(previous.get(SUPPORT_KEY))
+                        or (0, 0),
                         INFERRED_SCORE_KEY: score,
                     }
                     changed.add(target)
@@ -734,12 +754,14 @@ def propagateAndFilterIterative(
         status = domain_status(domain)
         if status == STATUS_INFERRED:
             domain[RELATIONS_KEY] = {
-                relation: payload for relation, payload in domain[RELATIONS_KEY].items()
+                relation: payload
+                for relation, payload in domain[RELATIONS_KEY].items()
                 if INFERRED_SCORE_KEY in payload
             }
         elif status == STATUS_OBSERVED:
             domain[RELATIONS_KEY] = {
-                relation: payload for relation, payload in domain[RELATIONS_KEY].items()
+                relation: payload
+                for relation, payload in domain[RELATIONS_KEY].items()
                 if has_positive_support(payload.get(SUPPORT_KEY))
             }
     return result
@@ -748,12 +770,14 @@ def propagateAndFilterIterative(
 def learner2(
     qcn: dict,
     entities: dict,
-    properties: dict,
+    properties: Collection[str],
     domain_reliability_threshold: int = 0,
     relation_Occurence_threshold: float = 0.0,
     reduced_composition: bool = True,
     mode: str = "conservative",
     max_stages: int | None = None,
+    prepared_oracle: dict[str, Any] | None = None,
+    oracle_cache_path: Path | None = None,
 ) -> dict | None:
     """
     Learner threshold-free with an oracle phase followed by propagation/filtering.
@@ -763,67 +787,86 @@ def learner2(
 
     cpu_start = time.process_time()
     oracle_phase_start = cpu_start
-    initial_qcn = copy.deepcopy(qcn)
-    kept_properties = set(properties)
-    kept_facts_count = 0
-    for entity in entities.values():
-        for prop, triples in entity.triples_per_p.items():
-            if prop in kept_properties:
-                kept_facts_count += len(triples)
+    if prepared_oracle is None:
+        initial_qcn = copy.deepcopy(qcn)
+        kept_properties = set(properties)
+        kept_facts_count = 0
+        for entity in entities.values():
+            for prop, triples in entity.triples_per_p.items():
+                if prop in kept_properties:
+                    kept_facts_count += len(triples)
 
-    total_oracle_calls = 0
-    min_oracle_cpu_time = float('inf')
-    max_oracle_cpu_time = float('-inf')
-    oracle_sum_cpu_time = 0.0
-    oracle_property_index = build_oracle_property_index(entities, properties)
-    for p1, p2 in combinations(properties, 2):
-        if (p1, p2) not in qcn:
-            print(
-                "Warning: missing arc in qcn for pair:",
-                (p1, p2),
-                "this should not happen !",
+        total_oracle_calls = 0
+        min_oracle_cpu_time = float("inf")
+        max_oracle_cpu_time = float("-inf")
+        oracle_sum_cpu_time = 0.0
+        oracle_property_index = build_oracle_property_index(entities, properties)
+        for total_oracle_calls, (p1, p2) in enumerate(combinations(properties, 2), 1):
+            if (p1, p2) not in qcn:
+                print(
+                    "Warning: missing arc in qcn for pair:",
+                    (p1, p2),
+                    "this should not happen !",
+                )
+                raise ValueError(f"Missing arc in qcn for pair: {(p1, p2)}")
+            if (p2, p1) not in qcn:
+                print(
+                    "Warning: missing arc in qcn for pair:",
+                    (p2, p1),
+                    "this should not happen !",
+                )
+                raise ValueError(f"Missing arc in qcn for pair: {(p2, p1)}")
+
+            V = (p1, p2)
+            oraclestart = time.process_time()
+
+            query_result = Query(V, entities, oracle_property_index)
+            oracle_end_time = time.process_time() - oraclestart
+            min_oracle_cpu_time = min(min_oracle_cpu_time, oracle_end_time)
+            max_oracle_cpu_time = max(max_oracle_cpu_time, oracle_end_time)
+            oracle_sum_cpu_time += oracle_end_time
+
+            if query_result is not None:
+                qcn[(p1, p2)] = query_result
+
+                qcn[(p2, p1)] = fast_converse_domain(qcn[(p1, p2)])
+
+                if not relation_entries(qcn[(p1, p2)]):
+                    print(f"COLLAPSE: apres la requête sur {V} ! ORIGINE: ORACLE")
+                    return None
+
+        oracle_phase_cpu_endtime = time.process_time() - oracle_phase_start
+
+        qcn = filter_unobserved_relations_after_oracle(qcn)
+        if oracle_cache_path is not None:
+            write_oracle_cache(
+                oracle_cache_path,
+                {
+                    "initial": initial_qcn,
+                    "after_oracle": qcn,
+                    "properties": list(properties),
+                    "kept_facts_count": kept_facts_count,
+                },
             )
-            raise ValueError(f"Missing arc in qcn for pair: {(p1, p2)}")
-        if (p2, p1) not in qcn:
-            print(
-                "Warning: missing arc in qcn for pair:",
-                (p2, p1),
-                "this should not happen !",
-            )
-            raise ValueError(f"Missing arc in qcn for pair: {(p2, p1)}")
+    else:
+        initial_qcn = copy.deepcopy(prepared_oracle["initial"])
+        qcn = copy.deepcopy(prepared_oracle["after_oracle"])
+        kept_properties = set(properties)
+        kept_facts_count = prepared_oracle["kept_facts_count"]
+        total_oracle_calls = 0
+        min_oracle_cpu_time = float("inf")
+        max_oracle_cpu_time = float("-inf")
+        oracle_sum_cpu_time = 0.0
+        oracle_phase_cpu_endtime = time.process_time() - oracle_phase_start
 
-        V = (p1, p2)
-        oraclestart = time.process_time()
-
-        query_result = Query(V, entities, oracle_property_index)
-        oracle_end_time = time.process_time() - oraclestart
-        total_oracle_calls += 1
-        min_oracle_cpu_time = min(min_oracle_cpu_time, oracle_end_time)
-        max_oracle_cpu_time = max(max_oracle_cpu_time, oracle_end_time)
-        oracle_sum_cpu_time += oracle_end_time
-
-        if query_result is not None:
-            qcn[(p1, p2)] = query_result
-
-
-            qcn[(p2, p1)] = fast_converse_domain(qcn[(p1, p2)])
-
-            if not relation_entries(
-                qcn[(p1, p2)]
-            ):
-                print(f"COLLAPSE: apres la requête sur {V} ! ORIGINE: ORACLE")
-                return None
-
-    oracle_phase_cpu_endtime = time.process_time() - oracle_phase_start
-
-    qcn = filter_unobserved_relations_after_oracle(qcn)
     qcn_after_oracle = qcn
-
 
     qcn_stats, after_oracle_report_stats = (
         compute_qcn_relation_stats_with_after_oracle_report(qcn_after_oracle)
     )
-    avg_oracle_cpu = oracle_sum_cpu_time / total_oracle_calls if total_oracle_calls > 0 else 0.0
+    avg_oracle_cpu = (
+        oracle_sum_cpu_time / total_oracle_calls if total_oracle_calls > 0 else 0.0
+    )
     min_oracle_cpu_time_safe = min_oracle_cpu_time if total_oracle_calls > 0 else 0.0
     max_oracle_cpu_time_safe = max_oracle_cpu_time if total_oracle_calls > 0 else 0.0
 
@@ -832,33 +875,25 @@ def learner2(
     print(f"{'─' * 60}")
     print(f"  Domaines (paires)          : {qcn_stats['num_domains']}")
     print(f"  Relations totales          : {qcn_stats['total_relations']}")
-    print(
-        f"  Rel observed & sup > 0     : {qcn_stats['count_observed']}"
-    )
+    print(f"  Rel observed & sup > 0     : {qcn_stats['count_observed']}")
     print(
         f"    -> proportion            : {qcn_stats['count_observed']} / "
         f"{qcn_stats['total_relations']} "
         f"({qcn_stats['percent_observed_sup_pos']:.2f}%)"
     )
-    print(
-        f"  Relations sans preuve (0, 0)   : {qcn_stats['count_none_none']}"
-    )
+    print(f"  Relations sans preuve (0, 0)   : {qcn_stats['count_none_none']}")
     print(
         f"    -> proportion            : {qcn_stats['count_none_none']} / "
         f"{qcn_stats['total_relations']} "
         f"({qcn_stats['percent_none_none']:.2f}%)"
     )
-    print(
-        f"  Relations testées absentes (0,n): {qcn_stats['count_none_zero']}"
-    )
+    print(f"  Relations testées absentes (0,n): {qcn_stats['count_none_zero']}")
     print(
         f"    -> proportion            : {qcn_stats['count_none_zero']} / "
         f"{qcn_stats['total_relations']} "
         f"({qcn_stats['percent_none_zero']:.2f}%)"
     )
-    print(
-        f"  Rel inferred               : {qcn_stats['count_inferred']}"
-    )
+    print(f"  Rel inferred               : {qcn_stats['count_inferred']}")
     print(
         f"  % domaines sans relation observée : "
         f"{qcn_stats['count_domains_without_observed']} / {qcn_stats['num_domains']} "
@@ -890,13 +925,18 @@ def learner2(
     print(f"{'─' * 60}\n")
 
     propagate_and_filter_start = time.process_time()
-    propagate = {"conservative": propagateAndFilterConservative,
-                 "two_stage": propagateAndFilterTwoStage,
-                 "iterative": propagateAndFilterIterative,
-                 "fix_point": propagateAndFilterIterative,
-                 "strass": propagateAndFilterStrass}[mode]
+    propagate = {
+        "conservative": propagateAndFilterConservative,
+        "two_stage": propagateAndFilterTwoStage,
+        "iterative": propagateAndFilterIterative,
+        "fix_point": propagateAndFilterIterative,
+        "strass": propagateAndFilterStrass,
+    }[mode]
     qcn = propagate(
-        qcn, domain_reliability_threshold, relation_Occurence_threshold, reduced_composition,
+        qcn,
+        domain_reliability_threshold,
+        relation_Occurence_threshold,
+        reduced_composition,
         **({"max_stages": max_stages} if mode == "strass" else {}),
     )
     propagate_and_filter_cpu_time = time.process_time() - propagate_and_filter_start
@@ -951,14 +991,13 @@ def learner2(
             "cumulative_after_oracle_cpu_time": cumulative_after_oracle,
             "cumulative_after_propagation_cpu_time": cumulative_after_propagation,
         },
-
-
     }
+
 
 def learnerTuned(
     qcn: dict,
     entities: dict,
-    properties: dict,
+    properties: Collection[str],
     domain_reliability_threshold: int = 0,
     relation_Occurence_threshold: float = 0.0,
     tuning_sample_size: int = 10,
@@ -989,8 +1028,8 @@ def learnerTuned(
                 kept_facts_count += len(triples)
 
     total_oracle_calls = 0
-    min_oracle_cpu_time = float('inf')
-    max_oracle_cpu_time = float('-inf')
+    min_oracle_cpu_time = float("inf")
+    max_oracle_cpu_time = float("-inf")
     oracle_sum_cpu_time = 0.0
     oracle_property_index = build_oracle_property_index(entities, properties)
     for p1, p2 in combinations(properties, 2):
@@ -1022,12 +1061,9 @@ def learnerTuned(
         if query_result is not None:
             qcn[(p1, p2)] = query_result
 
-
             qcn[(p2, p1)] = fast_converse_domain(qcn[(p1, p2)])
 
-            if not relation_entries(
-                qcn[(p1, p2)]
-            ):
+            if not relation_entries(qcn[(p1, p2)]):
                 print(f"COLLAPSE: apres la requête sur {V} ! ORIGINE: ORACLE")
                 return None
 
@@ -1037,11 +1073,12 @@ def learnerTuned(
     # Keep the filtered oracle result: the working QCN is masked below.
     qcn_after_oracle = copy.deepcopy(qcn)
 
-
     qcn_stats, after_oracle_report_stats = (
         compute_qcn_relation_stats_with_after_oracle_report(qcn_after_oracle)
     )
-    avg_oracle_cpu = oracle_sum_cpu_time / total_oracle_calls if total_oracle_calls > 0 else 0.0
+    avg_oracle_cpu = (
+        oracle_sum_cpu_time / total_oracle_calls if total_oracle_calls > 0 else 0.0
+    )
     min_oracle_cpu_time_safe = min_oracle_cpu_time if total_oracle_calls > 0 else 0.0
     max_oracle_cpu_time_safe = max_oracle_cpu_time if total_oracle_calls > 0 else 0.0
 
@@ -1050,33 +1087,25 @@ def learnerTuned(
     print(f"{'─' * 60}")
     print(f"  Domaines (paires)          : {qcn_stats['num_domains']}")
     print(f"  Relations totales          : {qcn_stats['total_relations']}")
-    print(
-        f"  Rel observed & sup > 0     : {qcn_stats['count_observed']}"
-    )
+    print(f"  Rel observed & sup > 0     : {qcn_stats['count_observed']}")
     print(
         f"    -> proportion            : {qcn_stats['count_observed']} / "
         f"{qcn_stats['total_relations']} "
         f"({qcn_stats['percent_observed_sup_pos']:.2f}%)"
     )
-    print(
-        f"  Relations sans preuve (0, 0)   : {qcn_stats['count_none_none']}"
-    )
+    print(f"  Relations sans preuve (0, 0)   : {qcn_stats['count_none_none']}")
     print(
         f"    -> proportion            : {qcn_stats['count_none_none']} / "
         f"{qcn_stats['total_relations']} "
         f"({qcn_stats['percent_none_none']:.2f}%)"
     )
-    print(
-        f"  Relations testées absentes (0,n): {qcn_stats['count_none_zero']}"
-    )
+    print(f"  Relations testées absentes (0,n): {qcn_stats['count_none_zero']}")
     print(
         f"    -> proportion            : {qcn_stats['count_none_zero']} / "
         f"{qcn_stats['total_relations']} "
         f"({qcn_stats['percent_none_zero']:.2f}%)"
     )
-    print(
-        f"  Rel inferred               : {qcn_stats['count_inferred']}"
-    )
+    print(f"  Rel inferred               : {qcn_stats['count_inferred']}")
     print(
         f"  % domaines sans relation observée : "
         f"{qcn_stats['count_domains_without_observed']} / {qcn_stats['num_domains']} "
@@ -1132,15 +1161,19 @@ def learnerTuned(
 
     qcn_before_propagation = copy.deepcopy(qcn)
 
-
     propagate_and_filter_start = time.process_time()
-    propagate = {"conservative": propagateAndFilterConservative,
-                 "two_stage": propagateAndFilterTwoStage,
-                 "iterative": propagateAndFilterIterative,
-                 "fix_point": propagateAndFilterIterative,
-                 "strass": propagateAndFilterStrass}[mode]
+    propagate = {
+        "conservative": propagateAndFilterConservative,
+        "two_stage": propagateAndFilterTwoStage,
+        "iterative": propagateAndFilterIterative,
+        "fix_point": propagateAndFilterIterative,
+        "strass": propagateAndFilterStrass,
+    }[mode]
     qcn = propagate(
-        qcn, domain_reliability_threshold, relation_Occurence_threshold, reduced_composition,
+        qcn,
+        domain_reliability_threshold,
+        relation_Occurence_threshold,
+        reduced_composition,
         **({"max_stages": max_stages} if mode == "strass" else {}),
     )
     propagate_and_filter_cpu_time = time.process_time() - propagate_and_filter_start
@@ -1156,7 +1189,9 @@ def learnerTuned(
     for pair in selected_domains:
         before = {
             relation: score
-            for relation, score in relation_scores(selected_domains_before[pair]).items()
+            for relation, score in relation_scores(
+                selected_domains_before[pair]
+            ).items()
             if score > 0
         }
         after = {
@@ -1166,7 +1201,9 @@ def learnerTuned(
         }
         inferred = {
             relation: payload[INFERRED_SCORE_KEY]
-            for relation, payload in relation_entries(selected_domains_after[pair]).items()
+            for relation, payload in relation_entries(
+                selected_domains_after[pair]
+            ).items()
             if INFERRED_SCORE_KEY in payload
         }
         after_display = inferred or after
@@ -1177,7 +1214,6 @@ def learnerTuned(
             f"domaine={after_display}"
         )
     print(f"{'\u2500' * 60}\n")
-
 
     qcn_after_propagation_stats = compute_qcn_relation_stats(qcn_after_propagation)
     oracle_to_propagation_transition_stats = (
@@ -1237,9 +1273,8 @@ def learnerTuned(
             "cumulative_after_oracle_cpu_time": cumulative_after_oracle,
             "cumulative_after_propagation_cpu_time": cumulative_after_propagation,
         },
-
-
     }
+
 
 def count_total_relations(qcn):
     """Compte le nombre total de relations d'Allen dans tous les domaines"""
@@ -1327,9 +1362,7 @@ def compute_qcn_relation_stats_with_after_oracle_report(qcn: dict) -> tuple[dict
         "count_none_none": count_none_none,
         "count_none_zero": count_none_zero,
         "percent_observed_sup_pos": (
-            (count_observed / total_relations * 100)
-            if total_relations > 0
-            else 0.0
+            (count_observed / total_relations * 100) if total_relations > 0 else 0.0
         ),
         "percent_none_none": (
             (count_none_none / total_relations * 100) if total_relations > 0 else 0.0
@@ -1428,9 +1461,7 @@ def compute_qcn_relation_stats(qcn: dict) -> dict:
         avg_support = std_support = min_support = max_support = 0.0
 
     percent_observed_sup_pos = (
-        (count_observed / total_relations * 100)
-        if total_relations > 0
-        else 0.0
+        (count_observed / total_relations * 100) if total_relations > 0 else 0.0
     )
     percent_none_none = (
         (count_none_none / total_relations * 100) if total_relations > 0 else 0.0
@@ -1531,17 +1562,18 @@ def compute_oracle_to_propagation_transition_stats(
         propagation_entries = relation_entries(propagation_domain)
 
         oracle_has_positive_support = domain_status(oracle_domain) == STATUS_OBSERVED
-        propagation_has_positive_support = domain_status(
-            propagation_domain
-        ) == STATUS_OBSERVED
+        propagation_has_positive_support = (
+            domain_status(propagation_domain) == STATUS_OBSERVED
+        )
         propagation_has_inference = any(
-            INFERRED_SCORE_KEY in payload
-            for payload in propagation_entries.values()
+            INFERRED_SCORE_KEY in payload for payload in propagation_entries.values()
         )
 
         for relation, oracle_payload in oracle_entries.items():
             oracle_support = oracle_payload.get(SUPPORT_KEY)
-            oracle_status = STATUS_OBSERVED if has_positive_support(oracle_support) else None
+            oracle_status = (
+                STATUS_OBSERVED if has_positive_support(oracle_support) else None
+            )
             propagation_payload = propagation_entries.get(relation)
             if propagation_payload is None:
                 propagation_status = None
@@ -1572,7 +1604,9 @@ def compute_oracle_to_propagation_transition_stats(
         "none_to_inferred_count": none_to_inferred_count,
         "observed_after_oracle_total": observed_after_oracle_total,
         "initial_total_relations": count_total_relations(initial_qcn),
-        "after_propagation_total_relations": count_total_relations(after_propagation_qcn),
+        "after_propagation_total_relations": count_total_relations(
+            after_propagation_qcn
+        ),
         "domains_without_positive_support_after_oracle": domains_without_positive_support_after_oracle,
         "domains_without_positive_support_to_positive_after_propagation": domains_without_positive_support_to_positive_after_propagation,
     }
@@ -1588,11 +1622,9 @@ def processReductionRates(initialQCN, QCNAfterOracle, QCNAfterPC):
     :return: dict contenant les statistiques de réduction
     """
 
-
     initial_count = count_total_relations(initialQCN)
     after_oracle_count = count_total_relations(QCNAfterOracle)
     after_pc_count = count_total_relations(QCNAfterPC)
-
 
     oracle_reduction = (
         ((initial_count - after_oracle_count) / initial_count * 100)
@@ -1623,8 +1655,12 @@ def processReductionRates(initialQCN, QCNAfterOracle, QCNAfterPC):
     return reductionRates
 
 
-def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: bool = True,
-                     mode: str = "conservative"):
+def save_qcn_to_file(
+    learning_result: dict,
+    kg_type: str,
+    reduced_composition: bool = True,
+    mode: str = "conservative",
+):
     """
     Sauvegarde les résultats de l'apprentissage dans 2 fichiers :
     1. Un fichier JSON avec les QCNs (initial, après oracle, après propagation)
@@ -1639,13 +1675,11 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
     results_dir = results_root / kg_type / mode
     os.makedirs(results_dir, exist_ok=True)
 
-
     output_stem = build_output_stem(kg_type, reduced_composition)
     qcn_filename = f"{output_stem}.json"
     stats_filename = f"{output_stem}_stats.txt"
     qcn_path = results_dir / qcn_filename
     stats_path = results_dir / stats_filename
-
 
     def convert_qcn_for_json(qcn):
         """Convertit le QCN en format JSON-compatible"""
@@ -1661,10 +1695,22 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
         )
 
     with qcn_path.open("w", encoding="UTF-8") as f:
-        json.dump(qcn_data, f, indent=2, ensure_ascii=False)
+        # Encode one domain at a time with the C JSON encoder. This bounds the
+        # temporary string size and avoids millions of tiny pretty-print writes.
+        f.write("{")
+        for section_index, (section, domains) in enumerate(qcn_data.items()):
+            if section_index:
+                f.write(",")
+            f.write(json.dumps(section) + ":{")
+            for pair_index, (pair, domain) in enumerate(domains.items()):
+                if pair_index:
+                    f.write(",")
+                f.write(json.dumps(pair, ensure_ascii=False) + ":")
+                f.write(json.dumps(domain, separators=(",", ":"), ensure_ascii=False))
+            f.write("}")
+        f.write("}")
 
     print(f"✅ QCNs saved to: {qcn_path}")
-
 
     stats = learning_result.get("stats")
     oracle_stats = learning_result.get("oracle_stats", {})
@@ -1711,8 +1757,9 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
             f.write("\n")
 
             f.write("## ADDITIONAL INFORMATION\n")
-            f.write(f"Number of constraints (pairs)    : {stats['num_constraints']:>8}\n")
-
+            f.write(
+                f"Number of constraints (pairs)    : {stats['num_constraints']:>8}\n"
+            )
 
             avg_initial = (
                 stats["initial_total_relations"] / stats["num_constraints"]
@@ -1742,8 +1789,12 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
         else:
             f.write("## AVAILABLE STATISTICS (ORACLE PHASE)\n")
             if qcn_stats:
-                f.write(f"Domains (pairs)                 : {qcn_stats.get('num_domains', 0):>8}\n")
-                f.write(f"Total relations                 : {qcn_stats.get('total_relations', 0):>8}\n")
+                f.write(
+                    f"Domains (pairs)                 : {qcn_stats.get('num_domains', 0):>8}\n"
+                )
+                f.write(
+                    f"Total relations                 : {qcn_stats.get('total_relations', 0):>8}\n"
+                )
                 f.write(
                     "Observed rel. & support > 0    : "
                     f"{qcn_stats.get('count_observed', 0):>8}\n"
@@ -1798,7 +1849,9 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
                     f"{qcn_stats.get('std_support_per_domain', 0):.2f}\n"
                 )
             if oracle_stats:
-                f.write(f"Oracle calls                    : {oracle_stats.get('total_calls', 0):>8}\n")
+                f.write(
+                    f"Oracle calls                    : {oracle_stats.get('total_calls', 0):>8}\n"
+                )
                 f.write(
                     f"Total oracle phase cost (s)     : {oracle_stats.get('cost_of_the_oracle_phase', 0):>8.4f}\n"
                 )
@@ -1842,7 +1895,9 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
             observed_support_pos = int(
                 after_oracle_report_stats.get("observed_support_pos_relations", 0)
             )
-            zero_support = int(after_oracle_report_stats.get("zero_support_relations", 0))
+            zero_support = int(
+                after_oracle_report_stats.get("zero_support_relations", 0)
+            )
             dom_with_observed = int(
                 after_oracle_report_stats.get("domains_with_observed_status", 0)
             )
@@ -1906,24 +1961,18 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
 
         if oracle_to_propagation_transition_stats:
             none_after_oracle_total = int(
-                oracle_to_propagation_transition_stats.get(
-                    "none_after_oracle_total", 0
-                )
+                oracle_to_propagation_transition_stats.get("none_after_oracle_total", 0)
             )
             none_to_inferred_count = int(
-                oracle_to_propagation_transition_stats.get(
-                    "none_to_inferred_count", 0
-                )
+                oracle_to_propagation_transition_stats.get("none_to_inferred_count", 0)
             )
-            observed_after_oracle_total = int(
+            _observed_after_oracle_total = int(
                 oracle_to_propagation_transition_stats.get(
                     "observed_after_oracle_total", 0
                 )
             )
             initial_total_relations = int(
-                oracle_to_propagation_transition_stats.get(
-                    "initial_total_relations", 0
-                )
+                oracle_to_propagation_transition_stats.get("initial_total_relations", 0)
             )
             after_propagation_total_relations = int(
                 oracle_to_propagation_transition_stats.get(
@@ -1948,10 +1997,7 @@ def save_qcn_to_file(learning_result: dict, kg_type: str, reduced_composition: b
                 f"{none_to_inferred_count} / {none_after_oracle_total} "
                 f"({pct(none_to_inferred_count, none_after_oracle_total):.2f}%)\n"
             )
-            f.write(
-                "Total relations in initial QCN  : "
-                f"{initial_total_relations}\n"
-            )
+            f.write(f"Total relations in initial QCN  : {initial_total_relations}\n")
             f.write(
                 "Total relations after propagation: "
                 f"{after_propagation_total_relations}\n"
@@ -2014,12 +2060,20 @@ def learner_with_timeout(
     with mp.Pool(processes=1) as pool:
         result = pool.apply_async(
             learner2,
-            (entity_network, entities, properties, domain_reliability_threshold, relation_Occurence_threshold, reduced_composition, mode, max_stages),
+            (
+                entity_network,
+                entities,
+                properties,
+                domain_reliability_threshold,
+                relation_Occurence_threshold,
+                reduced_composition,
+                mode,
+                max_stages,
+            ),
         )
         try:
             learning_result = result.get(timeout=timeout)
             if learning_result is not None:
-
                 save_qcn_to_file(learning_result, kgName, reduced_composition, mode)
             return learning_result
         except mp.TimeoutError:
@@ -2046,9 +2100,7 @@ def Query(Vocabulary, entities, entity_property_index=None):
 
     allenrelMatching: dict[str, int] = {}
 
-    for r in (
-        ALLEN_RELATIONS
-    ):
+    for r in ALLEN_RELATIONS:
         allenrelMatching[r] = 0
     nbr_total = 0
 
@@ -2094,9 +2146,7 @@ def Query(Vocabulary, entities, entity_property_index=None):
                     add_allen_relation_matches(allenrelMatching, qp1, qp2)
 
     if nbr_total == 0:
-        return with_relation_data(
-            {relation: (0, 0) for relation in ALLEN_RELATIONS}
-        )
+        return with_relation_data({relation: (0, 0) for relation in ALLEN_RELATIONS})
     else:
         relation_counts = {
             relation: (occurrences, nbr_total)
@@ -2105,22 +2155,34 @@ def Query(Vocabulary, entities, entity_property_index=None):
         return with_relation_data(relation_counts)
 
 
-def analyze_qcn_scores(kg_type: str, reduced_composition: bool = True,
-                       mode: str = "conservative") -> dict | None:
+def analyze_qcn_scores(
+    kg_type: str,
+    reduced_composition: bool = True,
+    mode: str = "conservative",
+    learning_result: dict | None = None,
+) -> dict | None:
     """
     Analyse un fichier JSON QCN pour compter les pourcentages de relations par catégorie de score.
 
     :param kg_type: type du knowledge graph (Q6256, Q215380, Q82955)
     :return: dict contenant les statistiques par QCN (after_oracle, after_propagation)
     """
-    qcn_path = results_root / kg_type / mode / f"{build_output_stem(kg_type, reduced_composition)}.json"
+    if learning_result is not None:
+        qcn_data = learning_result
+    else:
+        qcn_path = (
+            results_root
+            / kg_type
+            / mode
+            / f"{build_output_stem(kg_type, reduced_composition)}.json"
+        )
 
-    if not qcn_path.exists():
-        print(f"Fichier non trouvé: {qcn_path}")
-        return None
+        if not qcn_path.exists():
+            print(f"Fichier non trouvé: {qcn_path}")
+            return None
 
-    with qcn_path.open("r", encoding="UTF-8") as f:
-        qcn_data = json.load(f)
+        with qcn_path.open("r", encoding="UTF-8") as f:
+            qcn_data = json.load(f)
 
     results = {}
 
@@ -2136,9 +2198,8 @@ def analyze_qcn_scores(kg_type: str, reduced_composition: bool = True,
         count_observed = 0
         count_zero = 0
 
-
-        for pair_key, domain in qcn.items():
-            for relation, score in relation_scores(domain).items():
+        for domain in qcn.values():
+            for score in relation_scores(domain).values():
                 total_relations += 1
 
                 if score == -1.0:
@@ -2149,7 +2210,6 @@ def analyze_qcn_scores(kg_type: str, reduced_composition: bool = True,
                     count_observed += 1
                 elif score == 0:
                     count_zero += 1
-
 
         if total_relations > 0:
             results[qcn_name] = {
@@ -2167,14 +2227,18 @@ def analyze_qcn_scores(kg_type: str, reduced_composition: bool = True,
     return results
 
 
-def print_score_analysis(kg_type: str, reduced_composition: bool = True,
-                         mode: str = "conservative"):
+def print_score_analysis(
+    kg_type: str,
+    reduced_composition: bool = True,
+    mode: str = "conservative",
+    learning_result: dict | None = None,
+) -> None:
     """
     Affiche l'analyse des scores pour un KG donné.
 
     :param kg_type: type du knowledge graph
     """
-    results = analyze_qcn_scores(kg_type, reduced_composition, mode)
+    results = analyze_qcn_scores(kg_type, reduced_composition, mode, learning_result)
 
     if not results:
         return
@@ -2186,11 +2250,19 @@ def print_score_analysis(kg_type: str, reduced_composition: bool = True,
     for qcn_name, stats in results.items():
         print(f"📊 {qcn_name.upper().replace('_', ' ')}")
         print(f"   Total de relations: {stats['total_relations']}")
-        print(f"   Relations observées (score > 0):  {stats['observed_count']:>6} ({stats['observed_percent']:>6.2f}%)")
-        print(f"   Relations réparées (score = -1): {stats['repaired_count']:>6} ({stats['repaired_percent']:>6.2f}%)")
-        print(f"   Aucune entité (score = -2):      {stats['no_entities_count']:>6} ({stats['no_entities_percent']:>6.2f}%)")
-        if stats['zero_count'] > 0:
-            print(f"   Score zéro (score = 0):           {stats['zero_count']:>6} ({stats['zero_percent']:>6.2f}%)")
+        print(
+            f"   Relations observées (score > 0):  {stats['observed_count']:>6} ({stats['observed_percent']:>6.2f}%)"
+        )
+        print(
+            f"   Relations réparées (score = -1): {stats['repaired_count']:>6} ({stats['repaired_percent']:>6.2f}%)"
+        )
+        print(
+            f"   Aucune entité (score = -2):      {stats['no_entities_count']:>6} ({stats['no_entities_percent']:>6.2f}%)"
+        )
+        if stats["zero_count"] > 0:
+            print(
+                f"   Score zéro (score = 0):           {stats['zero_count']:>6} ({stats['zero_percent']:>6.2f}%)"
+            )
         print()
 
 
@@ -2207,7 +2279,11 @@ def main() -> None:
             "à l'inférence (ex. 0.1 pour une proportion de 10 pour cent)"
         ),
     )
-    parser.add_argument("nbr_total_min", type=int, help="Nombre minimum de fois qu'une paire de prpopriétés doit apparaître pour être considérée (ex: 10)")
+    parser.add_argument(
+        "nbr_total_min",
+        type=int,
+        help="Nombre minimum de fois qu'une paire de prpopriétés doit apparaître pour être considérée (ex: 10)",
+    )
     parser.add_argument(
         "timeout", type=int, help="Timeout en secondes (ex: 600 pour 10 min)"
     )
@@ -2224,8 +2300,21 @@ def main() -> None:
         default="conservative",
         help="Propagation conservative, two_stage ou iterative (alias : fix_point).",
     )
-    parser.add_argument("--max-stages", type=int, default=None,
-                        help="Nombre maximal de stages Strass (défaut : jusqu’à stabilisation).")
+    parser.add_argument(
+        "--max-stages",
+        type=int,
+        default=None,
+        help="Nombre maximal de stages Strass (défaut : jusqu’à stabilisation).",
+    )
+    parser.add_argument(
+        "--oracle-cache-dir",
+        type=Path,
+        default=None,
+        help="Cache privé de préparation de l’oracle pour une campagne.",
+    )
+    parser.add_argument(
+        "--_direct-learning", action="store_true", help=argparse.SUPPRESS
+    )
     args = parser.parse_args()
     if args.max_stages is not None and args.max_stages < 1:
         parser.error("--max-stages doit être positif")
@@ -2233,6 +2322,28 @@ def main() -> None:
     occurences_threshold = args.occurences
     nbr_total_min = args.nbr_total_min
     timeout_seconds = args.timeout
+
+    if not args._direct_learning:
+        # Let one child own data loading, learning and saving; no large
+        # Entity/QCN payload is transferred just to enforce a timeout.
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "tclkg.qcn_generator2",
+                    *sys.argv[1:],
+                    "--_direct-learning",
+                ],
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"Timeout après {timeout_seconds}s", flush=True)
+            raise SystemExit(124) from None
+        if completed.returncode:
+            raise SystemExit(completed.returncode)
+        return
 
     print(
         "-----------------------QCNGenerator2.py (threshold-free)--------------------------"
@@ -2245,50 +2356,74 @@ def main() -> None:
     print(f"Timeout: {timeout_seconds}s ({timeout_seconds / 60:.1f} min)")
     print(f"{'=' * 70}")
 
-    initial_entities, initial_properties = read_KG(kg_name)
-    entities = initial_entities
-    properties = initial_properties
-
-    entity_network = build_entity_network(
-        properties=properties,
-        default_constraints=ALLEN_RELATIONS,
-        top_k_fraction=PROPERTY_SUPPORT_THRESHOLD,
-        entities=entities,
+    cache_path = (
+        get_oracle_cache_path(
+            kg_name, ROOT_DATA, args.oracle_cache_dir, PROPERTY_SUPPORT_THRESHOLD
+        )
+        if args.oracle_cache_dir is not None
+        else None
     )
-
-
-    properties = sorted({p for pair in entity_network.keys() for p in pair})
-    kept_properties = set(properties)
-    kept_facts_count = 0
-    for entity in entities.values():
-        for prop, triples in entity.triples_per_p.items():
-            if prop in kept_properties:
-                kept_facts_count += len(triples)
+    prepared = read_oracle_cache(cache_path) if cache_path is not None else None
+    if prepared is None:
+        entities, initial_properties = read_KG(kg_name)
+        entity_network = build_entity_network(
+            properties=initial_properties,
+            default_constraints=ALLEN_RELATIONS,
+            top_k_fraction=PROPERTY_SUPPORT_THRESHOLD,
+            entities=entities,
+        )
+        properties = sorted({p for pair in entity_network for p in pair})
+        kept_properties = set(properties)
+        kept_facts_count = sum(
+            len(triples)
+            for entity in entities.values()
+            for prop, triples in entity.triples_per_p.items()
+            if prop in kept_properties
+        )
+        print(
+            f"Top {PROPERTY_SUPPORT_THRESHOLD:.0%} properties by quadruplet count: "
+            f"{len(initial_properties)} -> {len(properties)} properties kept"
+        )
+    else:
+        entities = {}
+        entity_network = {}
+        properties = prepared["properties"]
+        kept_facts_count = prepared["kept_facts_count"]
+        print(f"Oracle cache hit: {cache_path}; {len(properties)} properties kept")
 
     print(
-        f"Top {PROPERTY_SUPPORT_THRESHOLD:.0%} properties by quadruplet count: "
-        f"{len(initial_properties)} -> {len(properties)} properties kept"
+        f"Facts kept after top-{PROPERTY_SUPPORT_THRESHOLD:.0%} filter: {kept_facts_count}"
     )
-    print(f"Facts kept after top-{PROPERTY_SUPPORT_THRESHOLD:.0%} filter: {kept_facts_count}")
 
     print("\n🚀 Début de l'apprentissage des contraintes temporelles...")
-    learned_entity_network = learner_with_timeout(
+    learned_entity_network = learner2(
         entity_network,
         entities,
         properties,
-        kg_name,
-        timeout=timeout_seconds,
         domain_reliability_threshold=nbr_total_min,
         relation_Occurence_threshold=occurences_threshold,
         reduced_composition=args.reduced_composition,
         mode=args.propagation_mode,
         max_stages=args.max_stages,
+        prepared_oracle=prepared,
+        oracle_cache_path=cache_path,
     )
 
     if learned_entity_network is not None:
+        save_qcn_to_file(
+            learned_entity_network,
+            kg_name,
+            args.reduced_composition,
+            args.propagation_mode,
+        )
         print(f"✅ Apprentissage terminé avec succès pour {kg_name}")
 
-        print_score_analysis(kg_name, args.reduced_composition, args.propagation_mode)
+        print_score_analysis(
+            kg_name,
+            args.reduced_composition,
+            args.propagation_mode,
+            learned_entity_network,
+        )
     else:
         print(f"⚠️ Apprentissage interrompu par timeout pour {kg_name}")
 

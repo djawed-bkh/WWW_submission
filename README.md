@@ -176,29 +176,84 @@ uv run pyright src/tclkg/shacl_export.py tests/test_shacl_export.py
 uv run pytest tests/test_shacl_export.py
 ```
 
-## Ground Truth Before Optimization
+## Result equivalence before optimization
 
-This repository includes semantic ground-truth manifests for Learner 2 outputs.
-Use them before and after performance changes to ensure the optimized code keeps
-the same results.
-
-Fast checks:
+The current performance verification compares complete, locked outputs from the
+original source with outputs from the optimized learner. It checks constraints,
+supports, inferred scores, domain statuses and propagation stages exactly:
 
 ```bash
-pytest tests/test_ground_truth_unit.py tests/test_ground_truth_mini_pipeline.py
+uv run python scripts/benchmark_performance.py verify
 ```
 
-Mandatory full-result verification:
+The older `tclkg.ground_truth` manifest helpers remain available for legacy
+manifests. The full snapshots and portable regression cases used for this
+optimization are described below.
+
+## Performance snapshots and measurements
+
+The performance work uses an independent, exact result lock. It includes every
+domain field, relation, support count, `inferred_score`, and `inference_stage`.
+Dictionary order and the JSON representation of tuples/lists are normalized;
+floating-point values are compared exactly. Runtime fields are measured separately.
+
+Local artifacts are kept in the ignored `performance_artifacts/` directory:
+
+- `reference/provenance.json`: SHA-256 checksums of the original source, inputs,
+  dependency lock, and six pre-existing training result files.
+- `reference/source/`: the source captured before optimization.
+- `reference/results/`: read-only compressed reference networks for all three KGs.
+- `optimized/results/`: compressed networks produced by the optimized code.
+- `baseline.json` and `optimized.json`: individual repetitions and median times.
+- `baseline_sweep.json` and `optimized_sweep.json`: a three-configuration campaign.
+
+The three full inputs were recovered from `data/Data_chunk*`. Reference artifacts
+are created before changing the learner and are never regenerated during comparison.
+The benchmark refuses to overwrite an existing report or snapshot. The commands used to create and verify the measurements are:
 
 ```bash
-python -m tclkg.ground_truth verify
+uv run python scripts/benchmark_performance.py baseline
+uv run python scripts/benchmark_performance.py optimized
+uv run python scripts/benchmark_performance.py baseline --sweep --kg Q215380
+uv run python scripts/benchmark_performance.py optimized --sweep --kg Q215380
+uv run python scripts/benchmark_performance.py verify
 ```
 
-Optional slow verification, including `Q82955`:
+Each measurement uses three fresh sequential Python workers by default. Timings
+include loading, network construction, learning, JSON/statistics export, and score
+analysis; interpreter startup and verification hashing are excluded. The single
+run measurements use conservative propagation, reduced composition, occurrence
+threshold zero, and minimum totals 10 / 30 / 128 for Q6256 / Q215380 / Q82955.
+The campaign uses `(occurrence, minimum)` values `(0, 0)`, `(0.5, 30)`, and
+`(0.9, 150)` for Q215380. All three network states are checked on every repetition.
+
+Portable regression cases captured from the original code are committed in
+`ground_truth/performance_cases.json`. They cover 192 combinations across
+conservative, two-stage, iterative and Strass propagation, both composition modes,
+and evidence thresholds. Run their checks with:
 
 ```bash
-python -m tclkg.ground_truth verify --include-slow
+uv run pytest tests/test_performance.py tests/test_ground_truth_unit.py tests/test_two_stage_propagation.py
 ```
 
-See `ground_truth/README.md` for manifest format, regeneration commands, and
-the distinction between semantic correctness and runtime baselines.
+`ground_truth/performance_manifest.json` also preserves the full-dataset input
+checksums, original source checksums, and exact expected network fingerprints in
+a small versioned file. Verification checks the local snapshots against it.
+
+## Reusing the oracle in parameter sweeps
+
+The launcher prepares one requested configuration per KG before scheduling the
+remaining configurations. Later configurations reuse a private, atomic oracle
+cache in the batch directory. Its key covers the input bytes, preparation source,
+property selection, Python/NumPy versions, and `uv.lock`. Propagation thresholds
+and modes remain independent. JSON output retains the same schema and uses compact
+encoding; score analysis reads the already computed networks in memory.
+
+```bash
+TCLKG_DATA_DIR=performance_artifacts/data uv run python -m tclkg.launcher --kg Q215380 --max-parallel 2
+TCLKG_DATA_DIR=performance_artifacts/data uv run python -m tclkg.launcher --kg Q215380 --no-oracle-cache
+```
+
+`--max-parallel` is enforced. A timeout covers the child process that loads,
+learns, and saves the configuration, with exit code 124 on timeout. Direct learner
+CLI calls use the same process boundary without transferring loaded graphs.

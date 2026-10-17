@@ -1,0 +1,165 @@
+{
+  "format_version": 1,
+  "baseline_commit": "b69769e",
+  "comparison": "All domain and relation fields; exact floats; tuple/list JSON normalization; pair tuple ordering.",
+  "source_sha256": {
+    "tclkg/Latex_generator/ablation_tables.py": "2326ed814ac3fe9027cb395de9683183e097825f492daa680876ec5b2948fa2f",
+    "tclkg/Latex_generator/inferred_domains_stats.py": "ef0c91eb6ff71fa3b4dd70478e6acdbdae5d7d2fa1aa4d0d5ff1072d0f2d24a7",
+    "tclkg/Latex_generator/make_cpu_table.py": "b0a4177d9e688599b525a8b247b3019a8dd2d8189411073394cfd510168c8844",
+    "tclkg/Latex_generator/mrr_to_latex.py": "81335b8b4f6ed84265d77661a364cac06a240a4ef279a708e7ede324d668a37d",
+    "tclkg/Latex_generator/rq1_table.py": "0e4e48c7ab0ba3ca08bee3a0ac3395254dbf2a396996da7c9a5c2be6bb499053",
+    "tclkg/__init__.py": "c9de6da40838276023622f9a84a94cc3a3382416c740f27000836b682b601e0d",
+    "tclkg/allen_list.py": "ddd4373e57e69753159cfc0f43025bbdcdf52b00c2139cbcd1dbe603aa287dcf",
+    "tclkg/allen_relations.py": "4d05683f8afb5ca7b43898a107a251e425254e5ac60a8bdc405d9a56f3e3f563",
+    "tclkg/generator_common.py": "886276274516fa2259d10472340223735df1d23a8c5e232f8f211f4884b96662",
+    "tclkg/ground_truth.py": "5039a719e4a5ee1e73908f4659c3d7b4607b46a30191dcaed2987cc00b257494",
+    "tclkg/launcher.py": "fad42d785a00d016d13ea54f57523b465d35a7adf746a8357add869da9fa8531",
+    "tclkg/qcn_generator2.py": "26a67f2b5e447dc25bd333dfb48ffa95658f5017e1fc5e9cd59a6193eb6a405d",
+    "tclkg/random_experiments.py": "e4ecffbb57b1787b7547156b1f9ad059ba8930c82749b192f8a6aa143d2c1bb2",
+    "tclkg/rule_discovery.py": "97a9ca0261240884e256091769c64bd0d7c41fc9da0ce144357db42cef08815e",
+    "tclkg/shacl_export.py": "4565359202ef0d603fc5cb3aa8b84f857aa9c276830ffd30ef8bf259f44aa7c3",
+    "tclkg/time_package.py": "fe0f2f6593eb5a2f43dd42b807550f7d20d400b2c3a42adf1148aa036ca9c4f9",
+    "tclkg/tkgs_stats.py": "891db920ae89e7805f002280b114f84b4ef493364cdf11826655b94e3a138ab7"
+  },
+  "uv_lock_sha256": "68340dcde4f9141ef188ab9b86cb8979b9738ad21e412d8aab3af5829c56f0fd",
+  "inputs": {
+    "Q6256": {
+      "sha256": "2f822da1a8d8faa4ff01b09bc69db1cb9a767bc1403fb4f227e76eb51f719795",
+      "size_bytes": 23829785
+    },
+    "Q215380": {
+      "sha256": "3de2c77c092cc05133bde02e2ee7fb7c22c9e5b553eff4c74c9c53d81579f446",
+      "size_bytes": 14629596
+    },
+    "Q82955": {
+      "sha256": "2515c89b967145af4d052b69dd110dd67d722d84e0b3fe7c7b3f2430919a3fe8",
+      "size_bytes": 253531501
+    }
+  },
+  "cases": {
+    "Q6256": {
+      "occurrence_threshold": 0.0,
+      "min_total": 10,
+      "mode": "conservative",
+      "reduced_composition": true,
+      "sections": {
+        "initial": {
+          "sha256": "10a8f675bd9de5c4857fdac86d5bdc853af6037346850e0771ea80cf0e600564",
+          "domains": 58322,
+          "relations": 758186
+        },
+        "after_oracle": {
+          "sha256": "192f62c38ec9ec5d92c698943697227ebd655ee3c8a3cfa68fcec6aecadb1ecd",
+          "domains": 58322,
+          "relations": 75712
+        },
+        "after_propagation": {
+          "sha256": "98e780412b44a44da70251134fa9e26ef1f4507f2454f9078219eb362651e3c3",
+          "domains": 58322,
+          "relations": 382996
+        }
+      }
+    },
+    "Q215380": {
+      "occurrence_threshold": 0.0,
+      "min_total": 30,
+      "mode": "conservative",
+      "reduced_composition": true,
+      "sections": {
+        "initial": {
+          "sha256": "12a4a95c6ed408b07bf391aa1676fc848bf0ce9a2d49d4514ac9224dec1fa0dd",
+          "domains": 28056,
+          "relations": 364728
+        },
+        "after_oracle": {
+          "sha256": "8b69413b165c4440063413d195497b6484e7dca4f5b1cacf12e3f1c36207d1ea",
+          "domains": 28056,
+          "relations": 7034
+        },
+        "after_propagation": {
+          "sha256": "6d6471ce7d65105578974bfaf9fa5145273b5b572e0c3215a5c5af9e23cc081d",
+          "domains": 28056,
+          "relations": 14312
+        }
+      }
+    },
+    "Q82955": {
+      "occurrence_threshold": 0.0,
+      "min_total": 128,
+      "mode": "conservative",
+      "reduced_composition": true,
+      "sections": {
+        "initial": {
+          "sha256": "87ff0b236a43fedc9b3cc0b24d3c25aadc7fc94d1dc8641352e897bfe2c28d27",
+          "domains": 198470,
+          "relations": 2580110
+        },
+        "after_oracle": {
+          "sha256": "4f0e1f72bda9a0030dd7b84c6a421ab3cd9a7530ba96fdcca1a377f581fae9dc",
+          "domains": 198470,
+          "relations": 47572
+        },
+        "after_propagation": {
+          "sha256": "9a028bee7f4529c1f7ebcef40e7d017b64cb5f326935449bdc07e73588777a24",
+          "domains": 198470,
+          "relations": 109592
+        }
+      }
+    }
+  },
+  "sweep_cases": {
+    "Q215380": {
+      "occ_0.0_min_0": {
+        "initial": {
+          "sha256": "12a4a95c6ed408b07bf391aa1676fc848bf0ce9a2d49d4514ac9224dec1fa0dd",
+          "domains": 28056,
+          "relations": 364728
+        },
+        "after_oracle": {
+          "sha256": "8b69413b165c4440063413d195497b6484e7dca4f5b1cacf12e3f1c36207d1ea",
+          "domains": 28056,
+          "relations": 7034
+        },
+        "after_propagation": {
+          "sha256": "58816fe23e21f85574418810036f8e8310db819a25187b0c724f3f12c73d8df0",
+          "domains": 28056,
+          "relations": 126660
+        }
+      },
+      "occ_0.5_min_30": {
+        "initial": {
+          "sha256": "12a4a95c6ed408b07bf391aa1676fc848bf0ce9a2d49d4514ac9224dec1fa0dd",
+          "domains": 28056,
+          "relations": 364728
+        },
+        "after_oracle": {
+          "sha256": "8b69413b165c4440063413d195497b6484e7dca4f5b1cacf12e3f1c36207d1ea",
+          "domains": 28056,
+          "relations": 7034
+        },
+        "after_propagation": {
+          "sha256": "5ab734f2aa72b5872f16e760c7f671190b447a14f40e7356d82da35d1b4b6e57",
+          "domains": 28056,
+          "relations": 7240
+        }
+      },
+      "occ_0.9_min_150": {
+        "initial": {
+          "sha256": "12a4a95c6ed408b07bf391aa1676fc848bf0ce9a2d49d4514ac9224dec1fa0dd",
+          "domains": 28056,
+          "relations": 364728
+        },
+        "after_oracle": {
+          "sha256": "8b69413b165c4440063413d195497b6484e7dca4f5b1cacf12e3f1c36207d1ea",
+          "domains": 28056,
+          "relations": 7034
+        },
+        "after_propagation": {
+          "sha256": "8b69413b165c4440063413d195497b6484e7dca4f5b1cacf12e3f1c36207d1ea",
+          "domains": 28056,
+          "relations": 7034
+        }
+      }
+    }
+  }
+}

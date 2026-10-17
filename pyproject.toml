@@ -13,12 +13,17 @@ dependencies = [
     "matplotlib>=3.10.8",
     "networkx>=2.2",
     "numpy>=2.4.2",
+    "rdflib>=7.1,<8",
 ]
+
+[project.optional-dependencies]
+shacl = ["pyshacl>=0.30,<1"]
 
 [project.scripts]
 tclkg-qcn-generator2 = "tclkg.qcn_generator2:main"
 tclkg-run-experiments = "tclkg.run_experiments:main"
 tclkg-ground-truth = "tclkg.ground_truth:main"
+tclkg-shacl-export = "tclkg.shacl_export:main"
 
 [dependency-groups]
 dev = [
@@ -45,3 +50,7 @@ show_missing = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

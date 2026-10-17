@@ -91,6 +91,91 @@ export TCLKG_DATA_DIR=/absolute/path/to/data
 
 - Per-run logs: `logs_experiments/`
 
+## Export a temporal network to SHACL
+
+Install the locked environment, including the optional validation engine:
+
+```bash
+uv sync --locked --extra shacl
+```
+
+Export the final network without validating any data:
+
+```bash
+uv run tclkg-shacl-export \
+  Results/Q6256/conservative/qcn2_Q6256_reduced_composition.json \
+  --class-iri http://www.wikidata.org/entity/Q6256 \
+  --output shapes.ttl
+```
+
+The same script is available as `uv run python -m tclkg.shacl_export`.
+`--class-iri` is required because the TCL JSON does not store the target class.
+The default stage is `after_propagation`; `--stage after_oracle` and
+`--stage initial` select the other saved networks. A JSON object containing a
+single network directly is also accepted. Pair keys use the learner's
+`A___B` serialization, with the current `relations`/`support` payload format.
+
+Add `--data` to export and run validation in the same invocation:
+
+```bash
+uv run tclkg-shacl-export \
+  Results/Q6256/conservative/qcn2_Q6256_reduced_composition.json \
+  --class-iri http://www.wikidata.org/entity/Q6256 \
+  --output shapes.ttl \
+  --data data/Q6256/data.quintuplet \
+  --report validation-report.ttl
+```
+
+Without `--output`, the shapes are saved beside the JSON as `NETWORK.shacl.ttl`.
+Without `--report`, validation writes `OUTPUT_STEM.report.ttl` beside the shapes.
+Exit codes are **0** for successful export or conforming data, **1** for data
+violations, and **2** for an invalid invocation, unsupported input, or I/O error.
+A nonconforming graph still produces both the shapes and the validation report.
+Export alone requires RDFLib, installed with the base project; validation
+additionally requires the `shacl` extra.
+
+Validation accepts either:
+
+- A `.quintuplet` file using the same five tab-separated fields as TCL. It is
+  treated as a class-specific input split: every subject is assigned to
+  `--class-iri`. The converter uses the existing loader's day granularity,
+  ordering of reversed endpoints, completion of a single missing endpoint, and
+  deduplication. A subject that is a local identifier receives a deterministic
+  `urn:tcl:entity:` IRI. If both endpoints are `None`, they remain absent and
+  structural SHACL validation reports the incomplete assertion.
+- An RDF graph already encoding temporal assertion records. Each assertion has
+  type `https://example.org/tcl#TemporalAssertion`, the three RDF reification
+  predicates `rdf:subject`, `rdf:predicate`, `rdf:object`, and the endpoint
+  predicates `https://example.org/tcl#start` and `https://example.org/tcl#end`.
+  Endpoints are UTC `xsd:dateTime` literals with `Z` or `+00:00`. Class membership
+  must already be present in RDF; the script preserves it. Ordinary RDF triples
+  alone do not encode the intervals needed for these temporal checks.
+
+The data format is inferred from the suffix; `--data-format quintuplet` or an
+RDFLib format such as `turtle`, `xml`, or `nt` overrides detection. Wikidata
+`prop/direct/P…` predicates are normalized to `prop/P…` in both networks and
+input assertions. The quintuplet dateTime conversion supports years 0001–9999;
+out-of-range dates are reported with the source line number.
+
+Allowed Allen relations form a disjunction for **every** assertion pair sharing
+a subject and the two properties. Empty TCL domains represent unresolved
+information and add no temporal constraint; universal domains likewise add no
+restriction. Inferred relations are retained even when their observed support
+is zero. Scores are not applied as validation thresholds. Equivalent converse
+arcs are exported once; independently specified nonequivalent arcs are both
+preserved. The structural shape remains active even when no temporal pair is
+restricted, and admits point intervals to match the loader. The generic
+construction is described in `latex/tcl_shacl_shapes.tex`.
+
+Focused verification, also run by the SHACL CI workflow and pre-commit hooks:
+
+```bash
+uv run ruff check --fix src/tclkg/shacl_export.py tests/test_shacl_export.py
+uv run ruff format src/tclkg/shacl_export.py tests/test_shacl_export.py
+uv run pyright src/tclkg/shacl_export.py tests/test_shacl_export.py
+uv run pytest tests/test_shacl_export.py
+```
+
 ## Ground Truth Before Optimization
 
 This repository includes semantic ground-truth manifests for Learner 2 outputs.

@@ -1,259 +1,260 @@
-# XXXX-1 Submission
+# Temporal Constraint Learning — Review Artifact
 
-This repository contains the Learner 2 pipeline for temporal constraint learning on knowledge graphs.
+This artifact accompanies an anonymous research submission. It provides an
+implementation for learning temporal constraints between knowledge graph
+properties using Allen's interval relations.
 
-## Run Learner 2
+The pipeline builds a qualitative constraint network (QCN), derives observed
+relations in an oracle phase, and propagates temporal constraints. Saved outputs
+include the initial network, the network after the oracle, and the network after
+propagation.
 
-### 1. Prerequisites
+## 1. Environment setup
 
-- Linux/macOS shell (or equivalent terminal)
-- Python 3.12+
-- A virtual environment
+Run the commands below from the root of the extracted artifact or repository.
+Requirements: Python 3.12 or later and a Linux/macOS shell. Full datasets and
+parameter sweeps can require substantial memory and disk space; start with one
+configuration and one worker.
 
-### 2. Setup
-
-From the project root:
+For a locked environment, use `uv`:
 
 ```bash
-python -m venv .venv
+uv sync --locked
 source .venv/bin/activate
-pip install -e .
 ```
 
-### 3. Verify the CLI is available
+Alternatively, install with standard Python tooling (this resolves dependencies
+from `pyproject.toml` rather than using `uv.lock`):
 
 ```bash
-python -m tclkg.run_experiments --help
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+If obtaining the artifact through Git, install Git LFS and run `git lfs pull`
+inside the repository to retrieve the large result files. A source ZIP downloaded
+from a Git hosting service may contain LFS pointers instead of those results.
+The learner can regenerate results from the input data.
+
+## 2. Prepare the input data
+
+The input archive is distributed as five parts, `data/Data_chunkaa` through
+`data/Data_chunkae`. Reassemble and extract it into a separate directory so that
+existing files remain intact:
+
+```bash
+mkdir -p reviewer_data
+cat data/Data_chunk{aa,ab,ac,ad,ae} > reviewer_data/inputs.zip
+python -m zipfile -e reviewer_data/inputs.zip reviewer_data
+export TCLKG_DATA_DIR="$PWD/reviewer_data"
+```
+
+Set `TCLKG_DATA_DIR` in each new shell before running experiments. It must point
+to the directory containing the dataset subdirectories:
+
+```text
+reviewer_data/
+├── Q6256/data.quintuplet
+├── Q215380/data.quintuplet
+└── Q82955/data.quintuplet
+```
+
+| Dataset identifier | Entity class |
+| --- | --- |
+| `Q6256` | Country |
+| `Q215380` | Musical group |
+| `Q82955` | Politician |
+
+Each input line has five tab-separated fields:
+
+```text
+subject    property    object    start    end
+```
+
+The separators must be literal tabs. The loader uses day-level temporal
+intervals and accepts `None` for an unknown endpoint. For each dataset, it reads
+`data.quintuplet`, falling back to `train_cst_knowledge.quintuplet` if the former
+is absent. Other archive files contain the training, validation, and test splits.
+To learn exclusively from a particular split, create a separate data root with
+that split copied to `<dataset>/data.quintuplet` and point `TCLKG_DATA_DIR` to it.
+Without the environment variable, the default data root is `data/`.
+
+## 3. Run one configuration
+
+Check that the command-line interfaces are available:
+
+```bash
 python -m tclkg.qcn_generator2 --help
+python -m tclkg.run_experiments --help
 ```
 
-If these commands print usage text, your environment is ready.
-
-## Execution Modes
-
-### A) Run configured Learner 2 experiment batch
+Run conservative propagation on the Country dataset:
 
 ```bash
-python -m tclkg.run_experiments
+python -m tclkg.qcn_generator2 Q6256 0 10 3600 \
+  --propagation-mode conservative --reduced-composition
 ```
 
-Optional: run only one KG from the configured list:
+The four positional arguments are:
 
-```bash
-python -m tclkg.run_experiments --kg Q6256
+| Argument | Example | Meaning |
+| --- | --- | --- |
+| Dataset | `Q6256` | Subdirectory under the input data root |
+| Relation occurrence threshold | `0` | Minimum observed relation proportion used for inference, between 0 and 1 |
+| Domain reliability threshold (`tau`) | `10` | Minimum property-pair occurrence count used for propagation |
+| Timeout | `3600` | Maximum execution time in seconds |
+
+Conservative propagation and reduced composition are enabled by default.
+Reduced composition skips compositions yielding all 13 Allen relations. Use
+`--no-reduced-composition` to disable this option. Other implemented propagation
+modes are `two_stage`, `iterative` (also named `fix_point`), and `strass`.
+
+The example writes:
+
+```text
+Results/Q6256/conservative/qcn2_Q6256_reduced_composition.json
+Results/Q6256/conservative/qcn2_Q6256_reduced_composition_stats.txt
 ```
 
-Optional: limit parallel jobs:
+The JSON contains `initial`, `after_oracle`, `after_propagation`, and statistics.
+Property-pair keys use the separator `___`. The text report summarizes network
+sizes, reductions, and timings. Direct runs with the same dataset, mode, and
+composition option reuse these output paths; use the batch launcher below to
+keep configurations in separate directories. A timed-out direct run exits with
+code `124` and may not produce final output files.
+
+## 4. Run parameter sweeps
+
+Preview the configured experiments without running the learner:
 
 ```bash
-python -m tclkg.run_experiments --max-parallel 2
+python -m tclkg.run_experiments --kg Q6256 --dry-run
 ```
 
-The batch configuration is defined in:
-
-- `src/tclkg/run_experiments.py` (`EXPERIMENTS_GEN2`)
-
-### B) Run one Learner 2 experiment directly
+Run all default configurations sequentially:
 
 ```bash
-python -m tclkg.qcn_generator2 Q6256 3600
+python -m tclkg.run_experiments --max-parallel 1
 ```
 
-Arguments:
+Use `--kg Q6256` to restrict the run to one dataset. Increase `--max-parallel`
+only when sufficient memory is available. The default grid, defined in
+`src/tclkg/launcher.py`, uses conservative propagation, reduced composition,
+a timeout of 86,400 seconds per configuration, and these thresholds:
 
-- `kg`: one of `Q6256`, `Q215380`, `Q82955`
-- `timeout`: timeout in seconds
+| Dataset | Occurrence thresholds | Domain reliability thresholds (`tau`) |
+| --- | --- | --- |
+| `Q6256` | 0, 0.3, 0.5, 0.8, 0.9 | 0, 10, 59, 110, 160, 190 |
+| `Q215380` | 0, 0.3, 0.5, 0.8, 0.9 | 0, 10, 30, 60, 100, 150 |
+| `Q82955` | 0, 0.3, 0.5, 0.8, 0.9 | 0, 14, 42, 128, 389, 1185 |
 
-## Input Data
+This produces 30 configurations per dataset (90 in total). Oracle results are
+cached within a batch by default; use `--no-oracle-cache` to recompute them.
+Each batch writes networks, statistics, and `run.log` files under:
 
-By default, data is read from:
-
-- `data/<KG>/data.quintuplet`
-
-If missing, it falls back to:
-
-- `data/<KG>/train_cst_knowledge.quintuplet`
-
-You can override the data root with:
-
-```bash
-export TCLKG_DATA_DIR=/absolute/path/to/data
+```text
+parameter_sweeps/<batch>/<dataset>/<mode>/<configuration>/
 ```
 
-## Output Files
+Use `--output-root PATH` to change the output root.
 
-### Direct Learner 2 run (`tclkg.qcn_generator2`)
+For a small, explicit experiment, save the following as `reviewer_config.json`:
 
-- JSON QCN output: `Results/<KG>/qcn2_<KG>.json`
-- Statistics report: `Results/<KG>/qcn2_<KG>_stats.txt`
-
-### Batch run (`tclkg.run_experiments`)
-
-- Per-run logs: `logs_experiments/`
-
-## Export a temporal network to SHACL
-
-Install the locked environment, including the optional validation engine:
-
-```bash
-uv sync --locked --extra shacl
+```json
+{
+  "databases": ["Q6256"],
+  "configurations": [
+    {
+      "name": "occ0_tau10",
+      "occurrence_threshold": 0.0,
+      "min_total": 10,
+      "timeout": 3600,
+      "reduced_composition": true,
+      "propagation_mode": "conservative"
+    }
+  ]
+}
 ```
 
-Export the final network without validating any data:
+Then run:
 
 ```bash
-uv run tclkg-shacl-export \
+python -m tclkg.run_experiments \
+  --config reviewer_config.json --max-parallel 1 --output-root reviewer_results
+```
+
+## 5. Measure oracle and propagation CPU time separately
+
+```bash
+python -m tclkg.benchmark_cpu \
+  --datasets Q6256 Q215380 Q82955 --output reviewer_cpu.json
+```
+
+For each dataset, this recomputes the oracle five times without a cache, then
+measures five independent propagations for each default `tau` listed above.
+The occurrence threshold defaults to zero and reduced composition is enabled.
+The JSON records individual measurements and arithmetic means in CPU seconds
+using `time.process_time()`.
+
+Oracle timing excludes input loading, initial network construction, and copying;
+it includes index preparation, oracle queries, and converse domains. Propagation
+timing excludes copying the oracle network. These are phase timings rather than
+end-to-end elapsed runtimes. This benchmark does not impose an execution timeout.
+
+To measure a smaller selection:
+
+```bash
+python -m tclkg.benchmark_cpu \
+  --datasets Q6256 --taus 0 10 --occurrence 0 --output reviewer_cpu_small.json
+```
+
+The benchmark refuses to overwrite an existing output file. Use a new filename
+for each measurement campaign. CPU times depend on the machine and environment.
+
+## 6. Optional SHACL export
+
+Install the validation extra with `uv sync --locked --extra shacl` or
+`python -m pip install -e '.[shacl]'`. Export a learned network:
+
+```bash
+python -m tclkg.shacl_export \
   Results/Q6256/conservative/qcn2_Q6256_reduced_composition.json \
   --class-iri http://www.wikidata.org/entity/Q6256 \
-  --output shapes.ttl
+  --output reviewer_shapes.ttl
 ```
 
-The same script is available as `uv run python -m tclkg.shacl_export`.
-`--class-iri` is required because the TCL JSON does not store the target class.
-The default stage is `after_propagation`; `--stage after_oracle` and
-`--stage initial` select the other saved networks. A JSON object containing a
-single network directly is also accepted. Pair keys use the learner's
-`A___B` serialization, with the current `relations`/`support` payload format.
+The default exported stage is `after_propagation`; use `--stage after_oracle`
+for the oracle network. Add `--data "$TCLKG_DATA_DIR/Q6256/data.quintuplet"`
+and `--report reviewer_validation.ttl` to validate temporal assertions.
 
-Add `--data` to export and run validation in the same invocation:
+## 7. Verification and repository layout
+
+With the locked development environment installed, run the portable regression
+checks and CPU benchmark tests:
 
 ```bash
-uv run tclkg-shacl-export \
-  Results/Q6256/conservative/qcn2_Q6256_reduced_composition.json \
-  --class-iri http://www.wikidata.org/entity/Q6256 \
-  --output shapes.ttl \
-  --data data/Q6256/data.quintuplet \
-  --report validation-report.ttl
+uv run pytest tests/test_performance.py tests/test_ground_truth_unit.py \
+  tests/test_two_stage_propagation.py tests/test_benchmark_cpu.py
 ```
 
-Without `--output`, the shapes are saved beside the JSON as `NETWORK.shacl.ttl`.
-Without `--report`, validation writes `OUTPUT_STEM.report.ttl` beside the shapes.
-Exit codes are **0** for successful export or conforming data, **1** for data
-violations, and **2** for an invalid invocation, unsupported input, or I/O error.
-A nonconforming graph still produces both the shapes and the validation report.
-Export alone requires RDFLib, installed with the base project; validation
-additionally requires the `shacl` extra.
+These checks do not require a complete parameter sweep. Historical performance
+scripts may require local reference artifacts that are not part of the review
+package; they are not needed to run the approach described above.
 
-Validation accepts either:
+| Path | Contents |
+| --- | --- |
+| `src/tclkg/qcn_generator2.py` | Oracle, temporal constraint learning, and propagation |
+| `src/tclkg/launcher.py` | Parameter grids and batch execution |
+| `src/tclkg/benchmark_cpu.py` | Separate CPU measurements for oracle and propagation |
+| `src/tclkg/shacl_export.py` | SHACL export and optional validation |
+| `data/Data_chunk*` | Split input archive for the three datasets |
+| `Results/` | Saved networks, reports, and analysis artifacts |
+| `WWWfactChecking/` | Fact-checking experiment artifacts |
+| `scripts/` | Analysis and reporting utilities |
+| `ground_truth/`, `tests/` | Reference cases and regression checks |
+| `pyproject.toml`, `uv.lock` | Package metadata and dependency configuration |
 
-- A `.quintuplet` file using the same five tab-separated fields as TCL. It is
-  treated as a class-specific input split: every subject is assigned to
-  `--class-iri`. The converter uses the existing loader's day granularity,
-  ordering of reversed endpoints, completion of a single missing endpoint, and
-  deduplication. A subject that is a local identifier receives a deterministic
-  `urn:tcl:entity:` IRI. If both endpoints are `None`, they remain absent and
-  structural SHACL validation reports the incomplete assertion.
-- An RDF graph already encoding temporal assertion records. Each assertion has
-  type `https://example.org/tcl#TemporalAssertion`, the three RDF reification
-  predicates `rdf:subject`, `rdf:predicate`, `rdf:object`, and the endpoint
-  predicates `https://example.org/tcl#start` and `https://example.org/tcl#end`.
-  Endpoints are UTC `xsd:dateTime` literals with `Z` or `+00:00`. Class membership
-  must already be present in RDF; the script preserves it. Ordinary RDF triples
-  alone do not encode the intervals needed for these temporal checks.
-
-The data format is inferred from the suffix; `--data-format quintuplet` or an
-RDFLib format such as `turtle`, `xml`, or `nt` overrides detection. Wikidata
-`prop/direct/P…` predicates are normalized to `prop/P…` in both networks and
-input assertions. The quintuplet dateTime conversion supports years 0001–9999;
-out-of-range dates are reported with the source line number.
-
-Allowed Allen relations form a disjunction for **every** assertion pair sharing
-a subject and the two properties. Empty TCL domains represent unresolved
-information and add no temporal constraint; universal domains likewise add no
-restriction. Inferred relations are retained even when their observed support
-is zero. Scores are not applied as validation thresholds. Equivalent converse
-arcs are exported once; independently specified nonequivalent arcs are both
-preserved. The structural shape remains active even when no temporal pair is
-restricted, and admits point intervals to match the loader. The generic
-construction is described in `latex/tcl_shacl_shapes.tex`.
-
-Focused verification, also run by the SHACL CI workflow and pre-commit hooks:
-
-```bash
-uv run ruff check --fix src/tclkg/shacl_export.py tests/test_shacl_export.py
-uv run ruff format src/tclkg/shacl_export.py tests/test_shacl_export.py
-uv run pyright src/tclkg/shacl_export.py tests/test_shacl_export.py
-uv run pytest tests/test_shacl_export.py
-```
-
-## Result equivalence before optimization
-
-The current performance verification compares complete, locked outputs from the
-original source with outputs from the optimized learner. It checks constraints,
-supports, inferred scores, domain statuses and propagation stages exactly:
-
-```bash
-uv run python scripts/benchmark_performance.py verify
-```
-
-The older `tclkg.ground_truth` manifest helpers remain available for legacy
-manifests. The full snapshots and portable regression cases used for this
-optimization are described below.
-
-## Performance snapshots and measurements
-
-The performance work uses an independent, exact result lock. It includes every
-domain field, relation, support count, `inferred_score`, and `inference_stage`.
-Dictionary order and the JSON representation of tuples/lists are normalized;
-floating-point values are compared exactly. Runtime fields are measured separately.
-
-Local artifacts are kept in the ignored `performance_artifacts/` directory:
-
-- `reference/provenance.json`: SHA-256 checksums of the original source, inputs,
-  dependency lock, and six pre-existing training result files.
-- `reference/source/`: the source captured before optimization.
-- `reference/results/`: read-only compressed reference networks for all three KGs.
-- `optimized/results/`: compressed networks produced by the optimized code.
-- `baseline.json` and `optimized.json`: individual repetitions and median times.
-- `baseline_sweep.json` and `optimized_sweep.json`: a three-configuration campaign.
-
-The three full inputs were recovered from `data/Data_chunk*`. Reference artifacts
-are created before changing the learner and are never regenerated during comparison.
-The benchmark refuses to overwrite an existing report or snapshot. The commands used to create and verify the measurements are:
-
-```bash
-uv run python scripts/benchmark_performance.py baseline
-uv run python scripts/benchmark_performance.py optimized
-uv run python scripts/benchmark_performance.py baseline --sweep --kg Q215380
-uv run python scripts/benchmark_performance.py optimized --sweep --kg Q215380
-uv run python scripts/benchmark_performance.py verify
-```
-
-Each measurement uses three fresh sequential Python workers by default. Timings
-include loading, network construction, learning, JSON/statistics export, and score
-analysis; interpreter startup and verification hashing are excluded. The single
-run measurements use conservative propagation, reduced composition, occurrence
-threshold zero, and minimum totals 10 / 30 / 128 for Q6256 / Q215380 / Q82955.
-The campaign uses `(occurrence, minimum)` values `(0, 0)`, `(0.5, 30)`, and
-`(0.9, 150)` for Q215380. All three network states are checked on every repetition.
-
-Portable regression cases captured from the original code are committed in
-`ground_truth/performance_cases.json`. They cover 192 combinations across
-conservative, two-stage, iterative and Strass propagation, both composition modes,
-and evidence thresholds. Run their checks with:
-
-```bash
-uv run pytest tests/test_performance.py tests/test_ground_truth_unit.py tests/test_two_stage_propagation.py
-```
-
-`ground_truth/performance_manifest.json` also preserves the full-dataset input
-checksums, original source checksums, and exact expected network fingerprints in
-a small versioned file. Verification checks the local snapshots against it.
-
-## Reusing the oracle in parameter sweeps
-
-The launcher prepares one requested configuration per KG before scheduling the
-remaining configurations. Later configurations reuse a private, atomic oracle
-cache in the batch directory. Its key covers the input bytes, preparation source,
-property selection, Python/NumPy versions, and `uv.lock`. Propagation thresholds
-and modes remain independent. JSON output retains the same schema and uses compact
-encoding; score analysis reads the already computed networks in memory.
-
-```bash
-TCLKG_DATA_DIR=performance_artifacts/data uv run python -m tclkg.launcher --kg Q215380 --max-parallel 2
-TCLKG_DATA_DIR=performance_artifacts/data uv run python -m tclkg.launcher --kg Q215380 --no-oracle-cache
-```
-
-`--max-parallel` is enforced. A timeout covers the child process that loads,
-learns, and saves the configuration, with exit code 124 on timeout. Direct learner
-CLI calls use the same process boundary without transferring loaded graphs.
+All example paths are relative to the project root unless explicitly stated.
+Some command-line messages are in French; the commands and output formats are
+as documented above.

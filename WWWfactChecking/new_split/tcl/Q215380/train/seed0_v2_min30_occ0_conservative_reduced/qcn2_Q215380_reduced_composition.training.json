@@ -1,0 +1,14 @@
+{
+  "kg": "Q215380",
+  "input": "/home/djawad/Documents/Dev/ISWC-submission/splits/Q215380/seed0_v2/train.quintuplet",
+  "support": 0.0,
+  "minimum_occurrences": 30,
+  "timeout_seconds": 3600,
+  "propagation_mode": "conservative",
+  "reduced_composition": true,
+  "log": "/home/djawad/Documents/Dev/ISWC-submission/wwwfactcheck/new_split/tcl/Q215380/train/seed0_v2_min30_occ0_conservative_reduced/learner2.log",
+  "result": "/home/djawad/Documents/Dev/ISWC-submission/wwwfactcheck/new_split/tcl/Q215380/train/seed0_v2_min30_occ0_conservative_reduced/qcn2_Q215380_reduced_composition.json",
+  "status": "completed",
+  "split_dir": "/home/djawad/Documents/Dev/ISWC-submission/splits/Q215380/seed0_v2",
+  "train_sha256": "1416b4dc3c104be6530c120aa62f5064c5e0fae7e6665b9b8065697830be0235"
+}

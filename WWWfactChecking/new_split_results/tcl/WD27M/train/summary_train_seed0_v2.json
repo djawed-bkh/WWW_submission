@@ -1,0 +1,16 @@
+[
+  {
+    "kg": "WD27M",
+    "input": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/splits/WD27M/seed0_v2/train.quintuplet",
+    "support": 0.0,
+    "minimum_occurrences": 100,
+    "timeout_seconds": 86400,
+    "propagation_mode": "conservative",
+    "reduced_composition": true,
+    "log": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/results_server/new_split/tcl/WD27M/train/seed0_v2_min100_occ0_conservative_reduced/learner2.log",
+    "result": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/results_server/new_split/tcl/WD27M/train/seed0_v2_min100_occ0_conservative_reduced/qcn2_WD27M_reduced_composition.json",
+    "status": "completed",
+    "split_dir": "/people/dbekkoucha/maximalQCN/TemporalConstraints/ISWC-submission/splits/WD27M/seed0_v2",
+    "train_sha256": "ed65e6a60bffb4f3938a5f417cc0e742159d450b36d2e2d114a8ae2cd9d39635"
+  }
+]

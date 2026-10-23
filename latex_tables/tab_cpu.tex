@@ -1,0 +1,27 @@
+\begin{table}[h]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\scalebox{0.9}{%
+\begin{tabular}{@{}l r l rrrrrr@{}}
+\toprule
+Dataset & Orac. & & \multicolumn{6}{c}{} \\
+\midrule
+\multirow{2}{*}{Country} & \multirow{2}{*}{33.3}
+  & $\tau$ & 0 & 10 & 59 & 110 & 160 & 190 \\
+& & Inf. & 136.37 & 117.69 & 82.10 & 79.28 & 77.28 & 77.86 \\
+\midrule
+\multirow{2}{*}{Musical group} & \multirow{2}{*}{14.4}
+  & $\tau$ & 0 & 10 & 30 & 60 & 100 & 150 \\
+& & Inf. & 26.74 & 24.71 & 24.26 & 24.31 & 24.71 & 24.17 \\
+\midrule
+\multirow{2}{*}{Politician} & \multirow{2}{*}{184.0}
+  & $\tau$ & 0 & 14 & 42 & 128 & 389 & 1185 \\
+& & Inf. & 542.00 & 489.90 & 478.00 & 475.40 & 473.40 & 473.60 \\
+\bottomrule
+\end{tabular}%
+}
+\caption{Computation time in seconds. The oracle phase does not depend
+on $\tau$; Inf. reports propagation time only.}
+\label{tab:cpu}
+\end{table}

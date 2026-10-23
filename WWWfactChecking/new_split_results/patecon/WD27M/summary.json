@@ -1,0 +1,26 @@
+[
+  {
+    "dataset": "WD27M",
+    "split": "valid",
+    "method": "patecon",
+    "rules_file": "/people/dbekkoucha/maximalQCN/TemporalConstraints/PaTeCon/WWW_factChecking/results_new_split_classes/result_train/patecon/WD27M/train.all_constraints",
+    "training_confidence": null,
+    "training_support": 100,
+    "threshold": 0.9,
+    "protocol": "or_rules_vote_property_pairs_patecon",
+    "total": 1276477,
+    "answered": 950792,
+    "correct": 874133,
+    "accuracy": 0.9193735328021271,
+    "coverage": 0.7448563507215563,
+    "abstentions": 325685,
+    "unknown_entity": 0,
+    "no_usable_rule": 325685,
+    "reversed_candidates_true": 0,
+    "reversed_candidates_false": 0,
+    "code_0_count": 528179,
+    "code_1_count": 422613,
+    "code_2_count": 0,
+    "code_3_count": 325685
+  }
+]

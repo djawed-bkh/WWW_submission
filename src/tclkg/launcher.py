@@ -19,7 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Runtime files belong to the working directory, including wheel installations.
+PROJECT_ROOT = Path.cwd()
 # DEFAULT_DATABASES = ("Q6256", "Q215380", "Q82955")
 TIMEOUT = 86_400
 MAX_PARALLEL = 6
@@ -262,7 +263,9 @@ def _run_one(run: Run) -> tuple[Run, int]:
             ["--oracle-cache-dir", str(run.output_dir.parents[2] / ".oracle-cache")]
         )
     environment = os.environ.copy()
-    source_dir = str(PROJECT_ROOT / "src")
+    data_dir = Path(environment.get("TCLKG_DATA_DIR") or PROJECT_ROOT / "data")
+    environment["TCLKG_DATA_DIR"] = str(data_dir.expanduser().resolve())
+    source_dir = str(Path(__file__).resolve().parents[1])
     environment["PYTHONPATH"] = os.pathsep.join(
         part for part in (source_dir, environment.get("PYTHONPATH")) if part
     )

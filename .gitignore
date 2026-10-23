@@ -26,6 +26,7 @@ Trash.txt
 1.DataGeneration/Plots/
 *.csv
 *.pdf
+!Results/Supplementary_material.pdf
 *.txt
 .coverage
 resume_last_session.sh

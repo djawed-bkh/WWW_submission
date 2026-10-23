@@ -80,6 +80,37 @@ To learn exclusively from a particular split, create a separate data root with
 that split copied to `<dataset>/data.quintuplet` and point `TCLKG_DATA_DIR` to it.
 Without the environment variable, the default data root is `data/`.
 
+### WD27M (external download)
+
+WD27M must be obtained separately from the
+[PaTeCon repository](https://github.com/JianhaoChen-nju/PaTeCon).
+Follow the download link in its **Dataset** section to retrieve WD27M; this
+large dataset is not included in the five-part archive above.
+
+Prepare the downloaded data in the five-column, tab-separated format described
+above and save it as:
+
+```text
+reviewer_data/WD27M/data.quintuplet
+```
+
+Dates must be readable by NumPy as day-level dates (for example, `1814-05-30`),
+and unknown endpoints must use `None`. PaTeCon documents unknown endpoints as
+`null`; normalize those values to `None` before using this loader. Keep the
+subject, property, object, start, and end columns in that order.
+
+With `TCLKG_DATA_DIR` still pointing to `reviewer_data`, run:
+
+```bash
+python -m tclkg.qcn_generator2 WD27M 0 100 86400 \
+  --propagation-mode conservative --reduced-composition
+```
+
+This example uses an occurrence threshold of zero, `tau=100`, and a 24-hour
+execution timeout. WD27M is not part of the default three-dataset sweep. To run
+it through the batch launcher, use the custom JSON configuration in Section 4
+with `"databases": ["WD27M"]` and the desired thresholds and timeout.
+
 ## 3. Run one configuration
 
 Check that the command-line interfaces are available:

@@ -1,4 +1,4 @@
-# Temporal Constraint Learning — Review Artifact
+# Temporal Constraint Learning 
 
 This artifact accompanies an anonymous research submission. It provides an
 implementation for learning temporal constraints between knowledge graph
